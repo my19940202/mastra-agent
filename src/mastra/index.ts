@@ -9,13 +9,16 @@ import {
   SensitiveDataFilter,
 } from '@mastra/observability';
 import { agent } from './agents/agent';
+import { familyLegalIntakeAgent } from './agents/family-legal-intake-agent';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
 
 export const mastra = new Mastra({
   bundler: {
     externals: ['@duckdb/node-bindings'],
   },
-  agents: { agent },
+  // Agent 只有注册到 Mastra 实例后，才会出现在 Studio 的 Agents 页面中。
+  // 保留原通用 Agent，同时加入家庭法律预咨询 Agent，便于分别测试。
+  agents: { agent, familyLegalIntakeAgent },
   tools: { startScheduleTool, stopScheduleTool },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
