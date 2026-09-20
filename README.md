@@ -22,6 +22,7 @@ Welcome to your new [Mastra](https://mastra.ai) project! We're excited to see wh
 src/mastra/agents/family-legal-intake-agent.ts  法律 Agent、问题树和记忆结构
 src/mastra/agents/agent.ts                      原通用 Agent
 src/mastra/index.ts                             Mastra 入口和 Agent 注册
+docs/mastra-core-concepts.md                    Mastra 基础概念学习笔记
 docs/family-legal-agent-guide.md                流程设计与测试教程
 ```
 
@@ -63,7 +64,7 @@ Agent 每轮只会询问一个关键问题，并把回答保存到当前 thread 
 - 修改 `familyLegalIntakeMemorySchema` 可以增加需要记录的案件字段。
 - 修改 `metadata.suggestedPrompts` 可以调整 Studio 中显示的示例问题。
 
-详细设计、数据流和完整测试脚本见 [`docs/family-legal-agent-guide.md`](docs/family-legal-agent-guide.md)。
+Mastra 基础概念见 [`docs/mastra-core-concepts.md`](docs/mastra-core-concepts.md)。详细设计、数据流和完整测试脚本见 [`docs/family-legal-agent-guide.md`](docs/family-legal-agent-guide.md)。
 
 This starter provides you with a general-purpose Mastra agent that can research current information, manage multi-step tasks, work with local files, run approved shell commands, and create recurring schedules.
 
