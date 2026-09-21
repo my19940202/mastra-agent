@@ -12,6 +12,7 @@ import { agent } from './agents/agent';
 import { familyLegalIntakeAgent } from './agents/family-legal-intake-agent';
 import { evaluateCaseReadinessTool } from './tools/evaluate-case-readiness-tool';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
+import { legalIntakeWorkflow } from './workflows/legal-intake-workflow';
 
 export const mastra = new Mastra({
   bundler: {
@@ -21,6 +22,7 @@ export const mastra = new Mastra({
   // 保留原通用 Agent，同时加入家庭法律预咨询 Agent，便于分别测试。
   agents: { agent, familyLegalIntakeAgent },
   tools: { startScheduleTool, stopScheduleTool, evaluateCaseReadinessTool },
+  workflows: { legalIntakeWorkflow },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({

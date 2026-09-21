@@ -6,7 +6,7 @@ import {
   type FamilyLegalIntakeMemory,
 } from '../legal-intake-schema';
 
-const readinessDecisionSchema = z.enum([
+export const readinessDecisionSchema = z.enum([
   'needs_more_information',
   'ready_for_guidance',
   'ready_for_handoff',
@@ -14,7 +14,7 @@ const readinessDecisionSchema = z.enum([
   'out_of_scope',
 ]);
 
-const readinessResultSchema = z.object({
+export const readinessResultSchema = z.object({
   decision: readinessDecisionSchema,
   recommendedStage: legalIntakeStageSchema,
   nextField: z.string().nullable(),
@@ -23,7 +23,15 @@ const readinessResultSchema = z.object({
   reason: z.string(),
 });
 
-type ReadinessResult = z.infer<typeof readinessResultSchema>;
+export const readinessInputSchema = z.object({
+  caseState: familyLegalIntakeMemorySchema,
+  handoffRequested: z
+    .boolean()
+    .optional()
+    .describe('仅当用户明确要求立即总结、生成律师摘要或交接时设为 true'),
+});
+
+export type ReadinessResult = z.infer<typeof readinessResultSchema>;
 type Question = { field: string; question: string };
 
 const questions: Record<string, string> = {
@@ -306,13 +314,7 @@ export const evaluateCaseReadinessTool = createTool({
   id: 'evaluate-case-readiness',
   description:
     '根据家庭法律预咨询的完整结构化案件状态，确定是否需要继续采集、下一次只问哪个字段，或是否进入安全处理、一般指引和律师交接。',
-  inputSchema: z.object({
-    caseState: familyLegalIntakeMemorySchema,
-    handoffRequested: z
-      .boolean()
-      .optional()
-      .describe('仅当用户明确要求立即总结、生成律师摘要或交接时设为 true'),
-  }),
+  inputSchema: readinessInputSchema,
   outputSchema: readinessResultSchema,
   execute: async ({ caseState, handoffRequested }) =>
     evaluateCaseReadiness(caseState, handoffRequested ?? false),

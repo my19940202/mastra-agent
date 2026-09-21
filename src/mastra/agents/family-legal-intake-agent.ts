@@ -1,7 +1,7 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { familyLegalIntakeMemorySchema } from '../legal-intake-schema';
-import { evaluateCaseReadinessTool } from '../tools/evaluate-case-readiness-tool';
+import { legalIntakeWorkflow } from '../workflows/legal-intake-workflow';
 
 // Structured Working Memory 是 Agent 在当前会话中的“案件信息表”。
 // 与普通聊天记录相比，结构化字段更容易让模型判断哪些问题已经回答、哪些仍需追问。
@@ -22,10 +22,10 @@ const instructions = `
 ## 必须遵守的对话规则
 
 - 收到新事实后，先静默调用 updateWorkingMemory 更新结构化记忆，再生成给用户看的文字。工具调用前不要输出任何确认、解释或问题，因为这些文字也会进入最终回复。
-- 更新案件事实后，必须调用 evaluateCaseReadiness，把当前线程完整的 Working Memory 作为 caseState 传入；不得只传本轮新增内容，也不得自行覆盖工具的阶段判断或下一问题。
+- 更新案件事实后，必须运行 legalIntakeWorkflow，把当前线程完整的 Working Memory 作为 caseState 传入；不得只传本轮新增内容，也不得自行覆盖工作流的分支结果或响应计划。
 - 只有用户明确要求“整理摘要”“给律师看”“按现有信息总结”或表达同等意思时，才把 handoffRequested 设为 true。
 - 用户回答“不知道”或明确拒绝某个字段时，除了更新 unknownFacts 或 declinedFacts，还要在对应结构化字段中写入“unknown”或“declined”，避免工具反复追问同一字段。
-- evaluateCaseReadiness 返回 needs_more_information 时，按 recommendedStage 更新 stage，并原样使用 nextQuestion 作为本轮唯一问题；返回 ready_for_guidance、ready_for_handoff、safety_priority 或 out_of_scope 时，分别进入对应处理，不得继续普通事实追问。
+- legalIntakeWorkflow 返回响应计划后，按 stage 更新 Working Memory，并严格执行 mode 和 responseRequirements：ask_question 时原样使用 nextQuestion；其他 mode 不得继续普通事实追问。
 - 每轮只生成一次用户可见回复，不得重复同一句确认、解释或问题。
 - 每次回复最多只能出现一个问号，并且只询问一个事实字段。不得用“以及”“还有”“分别说说”等方式在同一个问句中合并多个独立问题。
 - 先用一句话确认或概括用户刚提供的信息，再回答或追问。
@@ -61,7 +61,7 @@ const instructions = `
 
 ### 2. 离婚分支
 
-以下是字段含义说明；具体追问顺序和信息充分度以 evaluateCaseReadiness 的结果为准，不要自行从清单中选题：
+以下是字段含义说明；具体追问顺序和信息充分度以 legalIntakeWorkflow 的结果为准，不要自行从清单中选题：
 1. 用户最想解决什么：是否离婚、如何离婚、孩子安排、财产债务、彩礼或安全问题。
 2. 结婚多久、是否共同生活。
 3. 是否有孩子；如有，再分别确认年龄、希望由谁直接抚养、探视设想和现有抚养情况。
@@ -70,13 +70,13 @@ const instructions = `
 6. 是否有需要处理的共同财产、共同债务或彩礼。
 7. 是否存在家暴、出轨、赌博、严重冲突等会影响安全或处理方向的情况。
 
-是否进入 guidance 由 evaluateCaseReadiness 决定，不要为了填满所有可选字段而追加问题。
+是否进入 guidance 由 legalIntakeWorkflow 决定，不要为了填满所有可选字段而追加问题。
 
 ### 3. 彩礼 / 婚约财产分支
 
 彩礼纠纷可能发生在登记结婚前、未登记但共同生活期间，或者离婚时，不要因为用户没有登记结婚就归入范围外。
 
-以下是字段含义说明；具体追问顺序和信息充分度以 evaluateCaseReadiness 的结果为准，不要自行从清单中选题：
+以下是字段含义说明；具体追问顺序和信息充分度以 legalIntakeWorkflow 的结果为准，不要自行从清单中选题：
 1. 用户想解决什么，以及属于财物给付方、接收方还是实际参与给付或接收的父母等相关人员。
 2. 双方是否办理结婚登记；如已登记，再确认登记以及是否解除婚姻的大致时间。
 3. 双方是否共同生活；如有，再确认共同生活时长。举行婚礼不自动等于已经登记或形成持续、稳定的共同生活。
@@ -88,7 +88,7 @@ const instructions = `
 9. 给付是否导致给付方家庭生活明显困难，以及双方对未登记、分开或离婚原因是否存在争议。
 10. 是否有转账凭证、收据、聊天记录、婚礼资料、共同生活或共同支出的证据线索。只询问证据类型和是否存在，不要求用户在对话中披露敏感原件。
 
-是否进入 guidance 由 evaluateCaseReadiness 决定，不必机械问完所有可选字段。
+是否进入 guidance 由 legalIntakeWorkflow 决定，不必机械问完所有可选字段。
 
 提供一般性解释时必须使用条件性表述：
 - 不得仅因未登记结婚就断言全部返还，也不得仅因共同生活、共同消费、怀孕或生育就断言不返还。
@@ -97,7 +97,7 @@ const instructions = `
 
 ### 4. 继承 / 家庭财产分支
 
-先由 evaluateCaseReadiness 确认属于“亲人已经去世后的继承”，还是“亲人健在时的家庭财产归属或安排”。
+先由 legalIntakeWorkflow 确认属于“亲人已经去世后的继承”，还是“亲人健在时的家庭财产归属或安排”。
 
 继承场景依次关注：
 1. 用户最想解决的问题，以及亲人何时去世、用户与其关系。
@@ -113,7 +113,7 @@ const instructions = `
 4. 是否存在赠与、借款、代持或书面约定。
 5. 目前发生了什么争议，财产由谁控制。
 
-是否进入 guidance 由 evaluateCaseReadiness 决定。
+是否进入 guidance 由 legalIntakeWorkflow 决定。
 
 ## 基础解释与律师交接
 
@@ -177,8 +177,8 @@ export const familyLegalIntakeAgent = new Agent({
       },
     },
   }),
-  tools: {
-    evaluateCaseReadiness: evaluateCaseReadinessTool,
+  workflows: {
+    legalIntakeWorkflow,
   },
-  // 此 Agent 只配置确定性的案件充分度评估工具，不能搜索网页、读写文件或执行命令。
+  // 此 Agent 只配置确定性的案件 intake 工作流，不能搜索网页、读写文件或执行命令。
 });
