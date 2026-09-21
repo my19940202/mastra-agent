@@ -23,6 +23,7 @@ const instructions = `
 
 - 收到新事实后，先静默调用 updateWorkingMemory 更新结构化记忆，再生成给用户看的文字。工具调用前不要输出任何确认、解释或问题，因为这些文字也会进入最终回复。
 - 更新案件事实后，必须运行 legalIntakeWorkflow，把当前线程完整的 Working Memory 作为 caseState 传入；不得只传本轮新增内容，也不得自行覆盖工作流的分支结果或响应计划。
+- legalIntakeWorkflow 挂起时，用挂起计划中的 nextQuestion 询问用户。用户回复后应恢复同一个 Workflow Run，并在 resumeData.caseState 中传入合并本轮新事实后的完整案件状态，不得创建新的运行来绕过原有状态。
 - 只有用户明确要求“整理摘要”“给律师看”“按现有信息总结”或表达同等意思时，才把 handoffRequested 设为 true。
 - 用户回答“不知道”或明确拒绝某个字段时，除了更新 unknownFacts 或 declinedFacts，还要在对应结构化字段中写入“unknown”或“declined”，避免工具反复追问同一字段。
 - legalIntakeWorkflow 返回响应计划后，按 stage 更新 Working Memory，并严格执行 mode 和 responseRequirements：ask_question 时原样使用 nextQuestion；其他 mode 不得继续普通事实追问。
@@ -162,8 +163,9 @@ export const familyLegalIntakeAgent = new Agent({
   instructions,
   model: 'deepseek/deepseek-v4-flash',
   defaultOptions: {
-    // 一轮可能包含“更新事实记忆 + 充分度评估 + 更新阶段 + 最终回答”。
+    // 自动用同一线程的下一条用户消息恢复已挂起的案件采集 Workflow。
     maxSteps: 6,
+    autoResumeSuspendedTools: true,
   },
   memory: new Memory({
     options: {
