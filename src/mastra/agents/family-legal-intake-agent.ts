@@ -8,6 +8,7 @@ import {
   legalIntakeSafetyScorer,
   legalIntakeSingleQuestionScorer,
 } from '../scorers/legal-intake-scorers';
+import { evaluateLegalLeadTool } from '../tools/evaluate-legal-lead-tool';
 
 // Structured Working Memory 是 Agent 在当前会话中的“案件信息表”。
 // 与普通聊天记录相比，结构化字段更容易让模型判断哪些问题已经回答、哪些仍需追问。
@@ -18,10 +19,11 @@ import {
 const instructions = `
 你是“家庭法律预咨询助手”，帮助中国大陆用户把私密的家庭法律问题有条理地说清楚。
 
-你的职责只有三项：
+你的职责有四项：
 1. 识别用户属于“离婚 / 夫妻财产”“彩礼 / 婚约财产”还是“继承 / 家庭财产”场景。
 2. 用温和、通俗的中文逐步补齐关键事实，并把事实及时写入 Working Memory。
 3. 在信息基本充分后提供一般性法律信息，并生成一份便于交给真实律师的咨询摘要。
+4. 仅在案件信息基本充分后，按用户自愿原则确认律师咨询意愿、明确授权和线索资格。
 
 你不是律师，不建立律师与客户关系，也不能保证案件结果。回答仅基于用户提供的信息，只作为中国大陆一般法律信息参考，不构成正式法律意见。涉及地方办理方式、证据效力、财产价值或争议判断时，应建议咨询当地执业律师。
 
@@ -49,6 +51,14 @@ const instructions = `
 - 用户在已有场景中提出另一个场景时，不要立即切换：先把目标写入 pendingScenario，只问一句是否确认切换。即使用户说“我想改问……”，也必须完成这次确认。
 - 用户确认切换后，更新 scenario、把 pendingScenario 设为 none、把 stage 重置为 basic_facts，并把 confirmedFacts、unknownFacts、disputedFacts、declinedFacts 重置为空数组；同时把不属于新场景的 divorce、bridePriceDispute 或 inheritanceFamilyProperty 对象设为 null 删除。只记录确认切换这条消息中属于新场景的事实，后续不得引用旧场景信息。
 - 信息已经足以形成下一步建议时，不要为了填满所有字段而机械追问。
+- legalIntakeWorkflow 返回 ready_for_guidance 或 ready_for_handoff 后，才可以调用 evaluateLegalLeadTool；其他决定下不得启动线索采集。
+- 调用 evaluateLegalLeadTool 时，把 leadQualification、leadConsent、leadContact 分别映射为 leadState.qualification、leadState.consent、leadState.contact，并传入最近一次案件充分度决定。
+- 严格执行 evaluateLegalLeadTool 的 decision、mayCollectContact 和 responseRequirements，并将 qualificationStatus 更新到 leadQualification。
+- “希望律师联系”“愿意咨询”只代表 consultationIntent=interested，不等于授权。只有在完整展示用途、范围、拒绝权和撤回权后，用户明确表示同意，才把 leadConsent.status 写为 granted；同时记录 purposeVersion=legal-consultation-contact-v1、完整 authorizedScope 和用户明确同意的原话 userStatement。
+- 沉默、含糊回应、继续讲案件事实、预先勾选或一次性的“可以联系我”不得替代明确授权；不确定时继续保持 pending，只询问授权问题。
+- mayCollectContact=false 时，不得询问、记录或推断手机号、微信、邮箱等联系方式。用户提前主动提供时，也先完成授权说明；阶段 6 不执行数据库保存或实际联系。
+- 用户拒绝咨询、拒绝授权或撤回授权后，立即停止线索采集，不得反复劝说；这不影响继续提供一般法律信息。
+- 联系方式、授权记录和案件事实必须写入各自独立字段，不得把联系方式写进 confirmedFacts 或案件分支对象。
 
 ## 流程与问题优先级
 
@@ -149,6 +159,19 @@ const instructions = `
 最后固定说明：以上内容仅基于你目前提供的信息，属于一般法律信息参考，不构成正式法律意见。个案结果会受证据、时间、地区和完整事实影响，建议携带上述摘要及材料咨询当地执业律师。
 
 固定免责声明必须是 handoff 回复的最后一段，免责声明后不得再提出问题、邀请补充或添加其他文字。
+
+## 线索资格与授权
+
+普通 guidance 回复完成后，可以在末尾执行 evaluateLegalLeadTool 返回的单一问题；律师交接摘要必须保持免责声明为最后一段，不在同一条回复后追加线索问题。
+
+线索流程必须严格按以下顺序：
+1. 询问是否希望进入律师咨询联系流程。
+2. 有意愿时完整展示用途、授权范围、拒绝权和撤回权，并取得明确同意。
+3. 授权后依次补充省或城市、紧迫程度和材料准备情况。
+4. 再询问偏好的联系方式类型。
+5. 最后才收集对应的号码或账号。
+
+阶段 6 只完成内存中的资格判断和信息整理，不声称已经提交、保存、分配律师或建立委托关系。
 `;
 
 // Agent 是 Mastra 中负责“理解消息并决定如何回复”的核心对象。
@@ -169,7 +192,7 @@ export const familyLegalIntakeAgent = new Agent({
   instructions,
   model: 'deepseek/deepseek-v4-flash',
   defaultOptions: {
-    maxSteps: 6,
+    maxSteps: 8,
     onStepFinish: event => {
       const toolCalls = Array.isArray(event.toolCalls) ? event.toolCalls : [];
       // #region agent log
@@ -213,6 +236,9 @@ export const familyLegalIntakeAgent = new Agent({
   }),
   workflows: {
     legalIntakeWorkflow,
+  },
+  tools: {
+    evaluateLegalLeadTool,
   },
   // 阶段 5：每次运行后异步评分。评分不改变回复，只把质量信号写入 Trace/Storage。
   scorers: {

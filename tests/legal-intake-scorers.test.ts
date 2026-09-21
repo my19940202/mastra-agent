@@ -13,6 +13,83 @@ import {
   familyLegalIntakeInputSchema,
   legalIntakeCaseStateEnvelopeSchema,
 } from '../src/mastra/legal-intake-schema.ts';
+import { evaluateLegalLeadQualification } from '../src/mastra/legal-lead-policy.ts';
+
+const completeConsent = {
+  status: 'granted' as const,
+  purposeVersion: 'legal-consultation-contact-v1' as const,
+  authorizedScope: [
+    'case_summary',
+    'service_need',
+    'region',
+    'materials_status',
+    'contact_details',
+  ] as const,
+  userStatement: '我明确同意上述用途和范围',
+};
+
+test('lead collection is unavailable before case readiness and explicit consent', () => {
+  const notReady = evaluateLegalLeadQualification('needs_more_information', {});
+  assert.equal(notReady.decision, 'not_eligible');
+  assert.equal(notReady.mayCollectContact, false);
+
+  const interestedWithoutConsent = evaluateLegalLeadQualification('ready_for_guidance', {
+    qualification: { consultationIntent: 'interested' },
+    contact: { preferredMethod: 'phone', contactValue: 'test-only-number' },
+  });
+  assert.equal(interestedWithoutConsent.decision, 'request_explicit_consent');
+  assert.equal(interestedWithoutConsent.mayCollectContact, false);
+});
+
+test('a granted flag without a complete consent record cannot unlock contact collection', () => {
+  const result = evaluateLegalLeadQualification('ready_for_guidance', {
+    qualification: { consultationIntent: 'interested' },
+    consent: { status: 'granted' },
+  });
+  assert.equal(result.decision, 'request_explicit_consent');
+  assert.equal(result.mayCollectContact, false);
+});
+
+test('lead qualification follows consent, details, contact method, and contact value order', () => {
+  const region = evaluateLegalLeadQualification('ready_for_guidance', {
+    qualification: { consultationIntent: 'interested' },
+    consent: completeConsent,
+  });
+  assert.equal(region.nextField, 'qualification.region');
+
+  const contactMethod = evaluateLegalLeadQualification('ready_for_guidance', {
+    qualification: {
+      consultationIntent: 'interested',
+      region: '浙江杭州',
+      urgency: 'soon',
+      materialsStatus: 'some_available',
+    },
+    consent: completeConsent,
+  });
+  assert.equal(contactMethod.nextField, 'contact.preferredMethod');
+
+  const qualified = evaluateLegalLeadQualification('ready_for_guidance', {
+    qualification: {
+      consultationIntent: 'interested',
+      region: '浙江杭州',
+      urgency: 'soon',
+      materialsStatus: 'some_available',
+    },
+    consent: completeConsent,
+    contact: { preferredMethod: 'phone', contactValue: 'test-only-number' },
+  });
+  assert.equal(qualified.decision, 'qualified');
+});
+
+test('withdrawn consent stops lead collection even when contact data already exists', () => {
+  const result = evaluateLegalLeadQualification('ready_for_guidance', {
+    qualification: { consultationIntent: 'interested' },
+    consent: { status: 'withdrawn' },
+    contact: { preferredMethod: 'phone', contactValue: 'test-only-number' },
+  });
+  assert.equal(result.decision, 'declined');
+  assert.equal(result.mayCollectContact, false);
+});
 
 test('workflow input accepts and removes extra root-level fields', () => {
   const parsed = legalIntakeCaseStateEnvelopeSchema.parse({

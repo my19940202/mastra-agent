@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  legalLeadConsentSchema,
+  legalLeadContactSchema,
+  legalLeadQualificationSchema,
+} from './legal-lead-schema';
 
 export const legalScenarioSchema = z.enum([
   'unknown',
@@ -101,6 +106,9 @@ export const familyLegalIntakeMemorySchema = z.object({
   divorce: divorceSchema.nullable().optional(),
   bridePriceDispute: bridePriceDisputeSchema.nullable().optional(),
   inheritanceFamilyProperty: inheritanceFamilyPropertySchema.nullable().optional(),
+  leadQualification: legalLeadQualificationSchema.optional(),
+  leadConsent: legalLeadConsentSchema.optional(),
+  leadContact: legalLeadContactSchema.optional(),
 });
 
 // LLM 生成 Tool 参数时，偶尔会补出 childrenCount、childGender 等合理但未声明的键。
@@ -115,6 +123,9 @@ export const familyLegalIntakeInputSchema = familyLegalIntakeMemorySchema
       .catchall(z.unknown())
       .nullable()
       .optional(),
+    leadQualification: legalLeadQualificationSchema.catchall(z.unknown()).optional(),
+    leadConsent: legalLeadConsentSchema.catchall(z.unknown()).optional(),
+    leadContact: legalLeadContactSchema.catchall(z.unknown()).optional(),
   })
   .catchall(z.unknown())
   .transform(value => familyLegalIntakeMemorySchema.parse(value));

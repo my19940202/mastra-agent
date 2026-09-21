@@ -12,6 +12,7 @@ import {
 import { agent } from './agents/agent';
 import { familyLegalIntakeAgent } from './agents/family-legal-intake-agent';
 import { evaluateCaseReadinessTool } from './tools/evaluate-case-readiness-tool';
+import { evaluateLegalLeadTool } from './tools/evaluate-legal-lead-tool';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
 import { legalIntakeWorkflow } from './workflows/legal-intake-workflow';
 import { legalIntakeScorers } from './scorers/legal-intake-scorers';
@@ -23,7 +24,12 @@ export const mastra = new Mastra({
   // Agent 只有注册到 Mastra 实例后，才会出现在 Studio 的 Agents 页面中。
   // 保留原通用 Agent，同时加入家庭法律预咨询 Agent，便于分别测试。
   agents: { agent, familyLegalIntakeAgent },
-  tools: { startScheduleTool, stopScheduleTool, evaluateCaseReadinessTool },
+  tools: {
+    startScheduleTool,
+    stopScheduleTool,
+    evaluateCaseReadinessTool,
+    evaluateLegalLeadTool,
+  },
   workflows: { legalIntakeWorkflow },
   // 注册后 Scorer 才能被 Studio、Trace 和 Dataset Experiment 按 id 找到。
   scorers: legalIntakeScorers,
