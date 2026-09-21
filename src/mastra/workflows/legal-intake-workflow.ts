@@ -54,49 +54,62 @@ function toResponsePlan(
 
 export const collectLegalIntakeStep = createStep({
   id: 'collect-legal-intake',
-  description: '评估当前案件状态；信息不足时挂起同一个 Workflow Run，等待完整案件状态后恢复。',
+  description: '评估当前案件状态，并把充分度结果交给后续分支生成响应计划。',
   inputSchema: readinessInputSchema,
   outputSchema: readinessResultSchema,
   stateSchema: legalIntakeWorkflowStateSchema,
-  suspendSchema: legalIntakeResponsePlanSchema,
-  resumeSchema: readinessInputSchema,
-  execute: async ({ inputData, resumeData, state, setState, suspend }) => {
-    const currentInput = resumeData ?? inputData;
+  execute: async ({ inputData, state, setState }) => {
     const readiness = evaluateCaseReadiness(
-      currentInput.caseState,
-      currentInput.handoffRequested ?? false,
+      inputData.caseState,
+      inputData.handoffRequested ?? false,
     );
-    const shouldSuspend =
-      readiness.decision === 'needs_more_information' ||
-      (readiness.decision === 'safety_priority' && readiness.nextQuestion !== null);
-
-    const suspendedPlan = shouldSuspend
-      ? toResponsePlan(
-          readiness,
-          readiness.decision === 'safety_priority' ? 'handle_safety' : 'ask_question',
-          readiness.decision === 'safety_priority'
-            ? ['先表达对安全状况的关注', '原样使用 nextQuestion，并且不继续普通案件追问']
-            : [
-                '先用一句话确认用户刚提供的事实',
-                '原样使用 nextQuestion，并且本轮只提出这一个问题',
-                '不得提前给出案件结论',
-              ],
-        )
-      : null;
 
     await setState({
-      caseState: currentInput.caseState,
-      handoffRequested: currentInput.handoffRequested ?? false,
+      caseState: inputData.caseState,
+      handoffRequested: inputData.handoffRequested ?? false,
       turnCount: (state.turnCount ?? 0) + 1,
-      lastPlan: suspendedPlan,
+      lastPlan: null,
     });
 
-    if (suspendedPlan) {
-      return await suspend(suspendedPlan);
-    }
+    // #region agent log
+    fetch('http://127.0.0.1:7329/ingest/c35ee18f-ced6-4dfb-9939-f69ca388e4fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2d9e32' },
+      body: JSON.stringify({
+        sessionId: '2d9e32',
+        runId: 'post-fix',
+        hypothesisId: 'D',
+        location: 'legal-intake-workflow.ts:collectLegalIntakeStep',
+        message: 'collect-legal-intake completed without suspend',
+        data: {
+          decision: readiness.decision,
+          nextField: readiness.nextField,
+          hasNextQuestion: Boolean(readiness.nextQuestion),
+          nextQuestionLength: readiness.nextQuestion?.length ?? 0,
+          didSuspend: false,
+          scenario: inputData.caseState?.scenario ?? null,
+          turnCount: (state.turnCount ?? 0) + 1,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
 
     return readiness;
   },
+});
+
+const askQuestionStep = createStep({
+  id: 'ask-question',
+  description: '为仍需补齐关键事实的案件生成单一追问计划。',
+  inputSchema: readinessResultSchema,
+  outputSchema: legalIntakeResponsePlanSchema,
+  execute: async ({ inputData }) =>
+    toResponsePlan(inputData, 'ask_question', [
+      '先用一句话确认用户刚提供的事实',
+      '原样使用 nextQuestion，并且本轮只提出这一个问题',
+      '不得提前给出案件结论',
+    ]),
 });
 
 const guidanceStep = createStep({
@@ -160,6 +173,7 @@ const outOfScopeStep = createStep({
 });
 
 const branchOutputSchema = z.object({
+  'ask-question': legalIntakeResponsePlanSchema.optional(),
   'provide-guidance': legalIntakeResponsePlanSchema.optional(),
   'create-handoff': legalIntakeResponsePlanSchema.optional(),
   'handle-safety': legalIntakeResponsePlanSchema.optional(),
@@ -173,6 +187,7 @@ const finalizeResponsePlanStep = createStep({
   outputSchema: legalIntakeResponsePlanSchema,
   execute: async ({ inputData }) => {
     const plan =
+      inputData['ask-question'] ??
       inputData['provide-guidance'] ??
       inputData['create-handoff'] ??
       inputData['handle-safety'] ??
@@ -181,6 +196,27 @@ const finalizeResponsePlanStep = createStep({
     if (!plan) {
       throw new Error('Legal intake workflow completed without selecting a response branch.');
     }
+
+    // #region agent log
+    fetch('http://127.0.0.1:7329/ingest/c35ee18f-ced6-4dfb-9939-f69ca388e4fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2d9e32' },
+      body: JSON.stringify({
+        sessionId: '2d9e32',
+        runId: 'post-fix',
+        hypothesisId: 'B',
+        location: 'legal-intake-workflow.ts:finalizeResponsePlanStep',
+        message: 'workflow returned response plan',
+        data: {
+          mode: plan.mode,
+          nextField: plan.nextField,
+          hasNextQuestion: Boolean(plan.nextQuestion),
+          nextQuestionLength: plan.nextQuestion?.length ?? 0,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
 
     return plan;
   },
@@ -196,6 +232,7 @@ export const legalIntakeWorkflow = createWorkflow({
 })
   .then(collectLegalIntakeStep)
   .branch([
+    [async ({ inputData }) => inputData.decision === 'needs_more_information', askQuestionStep],
     [async ({ inputData }) => inputData.decision === 'ready_for_guidance', guidanceStep],
     [async ({ inputData }) => inputData.decision === 'ready_for_handoff', handoffStep],
     [async ({ inputData }) => inputData.decision === 'safety_priority', safetyStep],

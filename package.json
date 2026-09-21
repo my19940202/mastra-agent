@@ -5,9 +5,10 @@
   "main": "index.js",
   "private": true,
   "scripts": {
-    "dev": "mastra dev",
+    "dev": "AUTO_BLOCK_EXTERNAL_PROVIDERS=true mastra dev",
     "build": "mastra build",
-    "start": "mastra start"
+    "start": "mastra start",
+    "test:legal-intake": "node --experimental-strip-types --test tests/legal-intake-scorers.test.ts"
   },
   "keywords": [],
   "author": "",

@@ -2,6 +2,7 @@ import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import {
   familyLegalIntakeMemorySchema,
+  legalIntakeCaseStateEnvelopeSchema,
   legalIntakeStageSchema,
   type FamilyLegalIntakeMemory,
 } from '../legal-intake-schema';
@@ -23,13 +24,9 @@ export const readinessResultSchema = z.object({
   reason: z.string(),
 });
 
-export const readinessInputSchema = z.object({
-  caseState: familyLegalIntakeMemorySchema,
-  handoffRequested: z
-    .boolean()
-    .optional()
-    .describe('仅当用户明确要求立即总结、生成律师摘要或交接时设为 true'),
-});
+export const readinessInputSchema = legalIntakeCaseStateEnvelopeSchema.describe(
+  '案件状态输入；handoffRequested 仅在用户明确要求立即总结、生成律师摘要或交接时设为 true。',
+);
 
 export type ReadinessResult = z.infer<typeof readinessResultSchema>;
 type Question = { field: string; question: string };
@@ -91,7 +88,7 @@ function isAffirmative(value: unknown): boolean {
   if (/没有|无危险|不存在|未发生|尚未|否认|不是|不涉及|unknown|declined/u.test(normalized)) {
     return false;
   }
-  return /是|有|已|存在|发生|危险|不安全|家暴|威胁|yes|true/u.test(normalized);
+  return /是|有|已|存在|发生|分居|危险|不安全|家暴|威胁|yes|true/u.test(normalized);
 }
 
 function isCurrentlySafe(value: unknown): boolean {
@@ -251,6 +248,14 @@ export function evaluateCaseReadiness(
   state: FamilyLegalIntakeMemory,
   handoffRequested = false,
 ): ReadinessResult {
+  const result = evaluateCaseReadinessUnlogged(state, handoffRequested);
+  return logReadiness(result, state.scenario, handoffRequested);
+}
+
+function evaluateCaseReadinessUnlogged(
+  state: FamilyLegalIntakeMemory,
+  handoffRequested = false,
+): ReadinessResult {
   const safety = state.safety ?? {};
   const dangerMentioned =
     isAffirmative(safety.immediateDanger) ||
@@ -308,6 +313,33 @@ export function evaluateCaseReadiness(
   if (state.scenario === 'divorce') return evaluateDivorce(state);
   if (state.scenario === 'bride_price_dispute') return evaluateBridePrice(state);
   return evaluateInheritance(state);
+}
+
+function logReadiness(result: ReadinessResult, scenario: unknown, handoffRequested: boolean): ReadinessResult {
+  // #region agent log
+  fetch('http://127.0.0.1:7329/ingest/c35ee18f-ced6-4dfb-9939-f69ca388e4fa', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2d9e32' },
+    body: JSON.stringify({
+      sessionId: '2d9e32',
+          runId: 'post-fix',
+      hypothesisId: 'A',
+      location: 'evaluate-case-readiness-tool.ts:evaluateCaseReadiness',
+      message: 'readiness evaluated',
+      data: {
+        decision: result.decision,
+        nextField: result.nextField,
+        hasNextQuestion: Boolean(result.nextQuestion),
+        nextQuestionLength: result.nextQuestion?.length ?? 0,
+        missingCount: result.missingCriticalFacts.length,
+        scenario: typeof scenario === 'string' ? scenario : null,
+        handoffRequested,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+  return result;
 }
 
 export const evaluateCaseReadinessTool = createTool({

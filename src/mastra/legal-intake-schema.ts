@@ -103,4 +103,28 @@ export const familyLegalIntakeMemorySchema = z.object({
   inheritanceFamilyProperty: inheritanceFamilyPropertySchema.nullable().optional(),
 });
 
+// LLM 生成 Tool 参数时，偶尔会补出 childrenCount、childGender 等合理但未声明的键。
+// Tool 边界采用“宽进严出”：输入阶段允许额外键，transform 后立即按正式 Memory Schema
+// 清洗并丢弃未知字段，避免一次多余键导致整个 Workflow 无法启动或恢复。
+export const familyLegalIntakeInputSchema = familyLegalIntakeMemorySchema
+  .extend({
+    safety: safetySchema.catchall(z.unknown()).nullable().optional(),
+    divorce: divorceSchema.catchall(z.unknown()).nullable().optional(),
+    bridePriceDispute: bridePriceDisputeSchema.catchall(z.unknown()).nullable().optional(),
+    inheritanceFamilyProperty: inheritanceFamilyPropertySchema
+      .catchall(z.unknown())
+      .nullable()
+      .optional(),
+  })
+  .catchall(z.unknown())
+  .transform(value => familyLegalIntakeMemorySchema.parse(value));
+
+export const legalIntakeCaseStateEnvelopeSchema = z
+  .object({
+    caseState: familyLegalIntakeInputSchema,
+    handoffRequested: z.boolean().optional(),
+  })
+  .catchall(z.unknown())
+  .transform(({ caseState, handoffRequested }) => ({ caseState, handoffRequested }));
+
 export type FamilyLegalIntakeMemory = z.infer<typeof familyLegalIntakeMemorySchema>;

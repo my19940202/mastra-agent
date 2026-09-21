@@ -1,3 +1,4 @@
+import './debug-instrumentation';
 import { Mastra } from '@mastra/core/mastra';
 import { LibSQLStore } from '@mastra/libsql';
 import { DuckDBStore } from '@mastra/duckdb';
@@ -13,6 +14,7 @@ import { familyLegalIntakeAgent } from './agents/family-legal-intake-agent';
 import { evaluateCaseReadinessTool } from './tools/evaluate-case-readiness-tool';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
 import { legalIntakeWorkflow } from './workflows/legal-intake-workflow';
+import { legalIntakeScorers } from './scorers/legal-intake-scorers';
 
 export const mastra = new Mastra({
   bundler: {
@@ -23,6 +25,8 @@ export const mastra = new Mastra({
   agents: { agent, familyLegalIntakeAgent },
   tools: { startScheduleTool, stopScheduleTool, evaluateCaseReadinessTool },
   workflows: { legalIntakeWorkflow },
+  // 注册后 Scorer 才能被 Studio、Trace 和 Dataset Experiment 按 id 找到。
+  scorers: legalIntakeScorers,
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({

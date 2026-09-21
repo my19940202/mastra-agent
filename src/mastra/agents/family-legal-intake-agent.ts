@@ -2,6 +2,12 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { familyLegalIntakeMemorySchema } from '../legal-intake-schema';
 import { legalIntakeWorkflow } from '../workflows/legal-intake-workflow';
+import {
+  legalIntakeHandoffDisclaimerScorer,
+  legalIntakeNoAbsoluteConclusionScorer,
+  legalIntakeSafetyScorer,
+  legalIntakeSingleQuestionScorer,
+} from '../scorers/legal-intake-scorers';
 
 // Structured Working Memory 是 Agent 在当前会话中的“案件信息表”。
 // 与普通聊天记录相比，结构化字段更容易让模型判断哪些问题已经回答、哪些仍需追问。
@@ -23,7 +29,7 @@ const instructions = `
 
 - 收到新事实后，先静默调用 updateWorkingMemory 更新结构化记忆，再生成给用户看的文字。工具调用前不要输出任何确认、解释或问题，因为这些文字也会进入最终回复。
 - 更新案件事实后，必须运行 legalIntakeWorkflow，把当前线程完整的 Working Memory 作为 caseState 传入；不得只传本轮新增内容，也不得自行覆盖工作流的分支结果或响应计划。
-- legalIntakeWorkflow 挂起时，用挂起计划中的 nextQuestion 询问用户。用户回复后应恢复同一个 Workflow Run，并在 resumeData.caseState 中传入合并本轮新事实后的完整案件状态，不得创建新的运行来绕过原有状态。
+- legalIntakeWorkflow 会在本轮直接返回响应计划，不会为了追问而挂起对话。收到计划后必须生成用户可见回复：ask_question 时原样使用 nextQuestion。下一轮继续把完整 Working Memory 传入新的 workflow 运行，不要 resume 上一次运行，也不要猜测缺失事实。
 - 只有用户明确要求“整理摘要”“给律师看”“按现有信息总结”或表达同等意思时，才把 handoffRequested 设为 true。
 - 用户回答“不知道”或明确拒绝某个字段时，除了更新 unknownFacts 或 declinedFacts，还要在对应结构化字段中写入“unknown”或“declined”，避免工具反复追问同一字段。
 - legalIntakeWorkflow 返回响应计划后，按 stage 更新 Working Memory，并严格执行 mode 和 responseRequirements：ask_question 时原样使用 nextQuestion；其他 mode 不得继续普通事实追问。
@@ -163,9 +169,35 @@ export const familyLegalIntakeAgent = new Agent({
   instructions,
   model: 'deepseek/deepseek-v4-flash',
   defaultOptions: {
-    // 自动用同一线程的下一条用户消息恢复已挂起的案件采集 Workflow。
     maxSteps: 6,
-    autoResumeSuspendedTools: true,
+    onStepFinish: event => {
+      const toolCalls = Array.isArray(event.toolCalls) ? event.toolCalls : [];
+      // #region agent log
+      fetch('http://127.0.0.1:7329/ingest/c35ee18f-ced6-4dfb-9939-f69ca388e4fa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2d9e32' },
+        body: JSON.stringify({
+          sessionId: '2d9e32',
+          runId: 'post-fix',
+          hypothesisId: 'E',
+          location: 'family-legal-intake-agent.ts:onStepFinish',
+          message: 'agent step finished',
+          data: {
+            reason: event.finishReason ?? null,
+            textLength: typeof event.text === 'string' ? event.text.length : 0,
+            toolNames: toolCalls.map(call => {
+              if (call && typeof call === 'object' && 'payload' in call) {
+                const payload = call.payload as { toolName?: string };
+                return payload.toolName ?? 'unknown';
+              }
+              return 'unknown';
+            }),
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+    },
   },
   memory: new Memory({
     options: {
@@ -181,6 +213,25 @@ export const familyLegalIntakeAgent = new Agent({
   }),
   workflows: {
     legalIntakeWorkflow,
+  },
+  // 阶段 5：每次运行后异步评分。评分不改变回复，只把质量信号写入 Trace/Storage。
+  scorers: {
+    singleQuestion: {
+      scorer: legalIntakeSingleQuestionScorer,
+      sampling: { type: 'ratio', rate: 1 },
+    },
+    noAbsoluteConclusion: {
+      scorer: legalIntakeNoAbsoluteConclusionScorer,
+      sampling: { type: 'ratio', rate: 1 },
+    },
+    handoffDisclaimer: {
+      scorer: legalIntakeHandoffDisclaimerScorer,
+      sampling: { type: 'ratio', rate: 1 },
+    },
+    safetyPriority: {
+      scorer: legalIntakeSafetyScorer,
+      sampling: { type: 'ratio', rate: 1 },
+    },
   },
   // 此 Agent 只配置确定性的案件 intake 工作流，不能搜索网页、读写文件或执行命令。
 });
