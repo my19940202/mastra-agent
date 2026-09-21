@@ -1,4 +1,5 @@
 import { Agent } from '@mastra/core/agent';
+import { askUserTool } from '@mastra/core/tools';
 import { Memory } from '@mastra/memory';
 import { familyLegalIntakeMemorySchema } from '../legal-intake-schema';
 import { legalIntakeWorkflow } from '../workflows/legal-intake-workflow';
@@ -31,13 +32,15 @@ const instructions = `
 
 - 收到新事实后，先静默调用 updateWorkingMemory 更新结构化记忆，再生成给用户看的文字。工具调用前不要输出任何确认、解释或问题，因为这些文字也会进入最终回复。
 - 更新案件事实后，必须运行 legalIntakeWorkflow，把当前线程完整的 Working Memory 作为 caseState 传入；不得只传本轮新增内容，也不得自行覆盖工作流的分支结果或响应计划。
-- legalIntakeWorkflow 会在本轮直接返回响应计划，不会为了追问而挂起对话。收到计划后必须生成用户可见回复：ask_question 时原样使用 nextQuestion。下一轮继续把完整 Working Memory 传入新的 workflow 运行，不要 resume 上一次运行，也不要猜测缺失事实。
+- legalIntakeWorkflow 会在本轮直接返回响应计划。收到 ask_question 计划后，不要把问题输出成普通文本；必须按 questionPresentation 调用 ask_user，并把 nextQuestion 原样作为 question。
+- questionPresentation.control=text 时只传 question，省略 options 和 selectionMode；single_select 或 multi_select 时原样传入 options，并使用对应 selectionMode。不得自行改写选项或把多个问题合并到一次 ask_user。
+- ask_user 恢复后返回的内容就是用户对当前 nextField 的回答。先静默更新 Working Memory，再把完整 Working Memory 传入新的 legalIntakeWorkflow 运行；不要 resume Workflow，也不要猜测缺失事实。
 - 只有用户明确要求“整理摘要”“给律师看”“按现有信息总结”或表达同等意思时，才把 handoffRequested 设为 true。
 - 用户回答“不知道”或明确拒绝某个字段时，除了更新 unknownFacts 或 declinedFacts，还要在对应结构化字段中写入“unknown”或“declined”，避免工具反复追问同一字段。
-- legalIntakeWorkflow 返回响应计划后，按 stage 更新 Working Memory，并严格执行 mode 和 responseRequirements：ask_question 时原样使用 nextQuestion；其他 mode 不得继续普通事实追问。
-- 每轮只生成一次用户可见回复，不得重复同一句确认、解释或问题。
+- legalIntakeWorkflow 返回响应计划后，按 stage 更新 Working Memory，并严格执行 mode 和 responseRequirements：ask_question 时调用 ask_user；其他 mode 不得继续普通事实追问。
+- 每轮只生成一次用户可见回复，不得重复同一句确认、解释或问题。ask_user 卡片本身就是本轮的用户可见回复，调用前不要再输出确认句或问题文本。
 - 每次回复最多只能出现一个问号，并且只询问一个事实字段。不得用“以及”“还有”“分别说说”等方式在同一个问句中合并多个独立问题。
-- 先用一句话确认或概括用户刚提供的信息，再回答或追问。
+- 生成普通文本回答时，先用一句话确认或概括用户刚提供的信息；使用 ask_user 追问时直接展示交互卡片。
 - 语气温和、克制、中立。不要把离婚、死亡、冲突或刚补齐案件信息描述成“好消息”，也不要制造恐慌。
 - 用户一次提供多个事实时全部记录，不要重复询问。
 - 用户回答“不知道”时写入 unknownFacts；前后说法不一致时写入 disputedFacts；明确不愿回答时写入 declinedFacts。不要强迫用户披露。
@@ -54,6 +57,8 @@ const instructions = `
 - legalIntakeWorkflow 返回 ready_for_guidance 或 ready_for_handoff 后，才可以调用 evaluateLegalLeadTool；其他决定下不得启动线索采集。
 - 调用 evaluateLegalLeadTool 时，把 leadQualification、leadConsent、leadContact 分别映射为 leadState.qualification、leadState.consent、leadState.contact，并传入最近一次案件充分度决定。
 - 严格执行 evaluateLegalLeadTool 的 decision、mayCollectContact 和 responseRequirements，并将 qualificationStatus 更新到 leadQualification。
+- evaluateLegalLeadTool 返回 nextQuestion 时，同样必须按 questionPresentation 调用 ask_user，不得把线索问题退化成普通文本；恢复后的选择要规范化写入既有枚举字段。
+- 线索选项规范化规则：希望律师联系→interested，暂不需要→not_interested；明确同意→granted，不同意→declined；一般安排→normal，近期→soon，紧急→urgent；尚未整理→none，已有一部分→some_available，基本齐全→mostly_ready；电话→phone，微信→wechat，电子邮箱→email，其他方式→other。
 - “希望律师联系”“愿意咨询”只代表 consultationIntent=interested，不等于授权。只有在完整展示用途、范围、拒绝权和撤回权后，用户明确表示同意，才把 leadConsent.status 写为 granted；同时记录 purposeVersion=legal-consultation-contact-v1、完整 authorizedScope 和用户明确同意的原话 userStatement。
 - 沉默、含糊回应、继续讲案件事实、预先勾选或一次性的“可以联系我”不得替代明确授权；不确定时继续保持 pending，只询问授权问题。
 - mayCollectContact=false 时，不得询问、记录或推断手机号、微信、邮箱等联系方式。用户提前主动提供时，也先完成授权说明；阶段 6 不执行数据库保存或实际联系。
@@ -193,6 +198,10 @@ export const familyLegalIntakeAgent = new Agent({
   model: 'deepseek/deepseek-v4-flash',
   defaultOptions: {
     maxSteps: 8,
+    autoResumeSuspendedTools: true,
+    modelSettings: {
+      reasoning: 'none',
+    },
     onStepFinish: event => {
       const toolCalls = Array.isArray(event.toolCalls) ? event.toolCalls : [];
       // #region agent log
@@ -238,6 +247,7 @@ export const familyLegalIntakeAgent = new Agent({
     legalIntakeWorkflow,
   },
   tools: {
+    ask_user: askUserTool,
     evaluateLegalLeadTool,
   },
   // 阶段 5：每次运行后异步评分。评分不改变回复，只把质量信号写入 Trace/Storage。

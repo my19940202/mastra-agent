@@ -9,6 +9,7 @@ import {
   evaluateLegalLeadQualification,
   type LegalLeadPlan,
 } from '../legal-lead-policy';
+import { questionPresentationSchema } from '../legal-question-presentation';
 
 export const legalLeadDecisionSchema = z.enum([
   'not_eligible',
@@ -26,6 +27,7 @@ export const legalLeadPlanSchema = z.object({
   qualificationStatus: leadQualificationStatusSchema,
   nextField: z.string().nullable(),
   nextQuestion: z.string().nullable(),
+  questionPresentation: questionPresentationSchema.nullable(),
   reason: z.string(),
   responseRequirements: z.array(z.string()),
   mayCollectContact: z.boolean(),

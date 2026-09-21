@@ -1,4 +1,8 @@
 import type { LegalLeadState } from './legal-lead-schema';
+import {
+  getQuestionPresentation,
+  type QuestionPresentation,
+} from './legal-question-presentation';
 
 export type CaseReadinessDecision =
   | 'needs_more_information'
@@ -27,6 +31,7 @@ export type LegalLeadPlan = {
     | 'not_eligible';
   nextField: string | null;
   nextQuestion: string | null;
+  questionPresentation: QuestionPresentation | null;
   reason: string;
   responseRequirements: string[];
   mayCollectContact: boolean;
@@ -79,9 +84,12 @@ function plan(
     qualificationStatus,
     nextField,
     nextQuestion,
+    questionPresentation: getQuestionPresentation(nextField),
     reason,
     mayCollectContact,
-    responseRequirements,
+    responseRequirements: nextQuestion
+      ? ['按 questionPresentation 调用 ask_user，不要输出普通文本', ...responseRequirements]
+      : responseRequirements,
   };
 }
 

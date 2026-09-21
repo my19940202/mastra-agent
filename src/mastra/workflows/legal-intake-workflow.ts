@@ -7,6 +7,10 @@ import {
   type ReadinessResult,
 } from '../tools/evaluate-case-readiness-tool';
 import { familyLegalIntakeMemorySchema } from '../legal-intake-schema';
+import {
+  getQuestionPresentation,
+  questionPresentationSchema,
+} from '../legal-question-presentation';
 
 const responseModeSchema = z.enum([
   'ask_question',
@@ -21,6 +25,7 @@ export const legalIntakeResponsePlanSchema = z.object({
   stage: z.enum(['identify', 'safety', 'basic_facts', 'core_facts', 'guidance', 'handoff']),
   nextField: z.string().nullable(),
   nextQuestion: z.string().nullable(),
+  questionPresentation: questionPresentationSchema.nullable(),
   missingCriticalFacts: z.array(z.string()),
   reason: z.string(),
   responseRequirements: z.array(z.string()),
@@ -46,6 +51,7 @@ function toResponsePlan(
     stage: readiness.recommendedStage,
     nextField: readiness.nextField,
     nextQuestion: readiness.nextQuestion,
+    questionPresentation: getQuestionPresentation(readiness.nextField),
     missingCriticalFacts: readiness.missingCriticalFacts,
     reason: readiness.reason,
     responseRequirements,
@@ -106,8 +112,8 @@ const askQuestionStep = createStep({
   outputSchema: legalIntakeResponsePlanSchema,
   execute: async ({ inputData }) =>
     toResponsePlan(inputData, 'ask_question', [
-      '先用一句话确认用户刚提供的事实',
-      '原样使用 nextQuestion，并且本轮只提出这一个问题',
+      '按 questionPresentation 调用 ask_user，不要输出普通文本',
+      '把 nextQuestion 原样作为 question，并且本轮只提出这一个问题',
       '不得提前给出案件结论',
     ]),
 });
@@ -150,7 +156,10 @@ const safetyStep = createStep({
       inputData,
       'handle_safety',
       inputData.nextQuestion
-        ? ['先表达对安全状况的关注', '原样使用 nextQuestion，并且不继续普通案件追问']
+        ? [
+            '按 questionPresentation 调用 ask_user，不要输出普通文本',
+            '把 nextQuestion 原样作为 question，并且不继续普通案件追问',
+          ]
         : [
             '停止普通案件采集',
             '建议立即联系 110、前往安全地点并联系可信赖亲友或当地支持机构',

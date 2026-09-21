@@ -1,5 +1,6 @@
 import './debug-instrumentation';
 import { Mastra } from '@mastra/core/mastra';
+import { askUserTool } from '@mastra/core/tools';
 import { LibSQLStore } from '@mastra/libsql';
 import { DuckDBStore } from '@mastra/duckdb';
 import { MastraCompositeStore } from '@mastra/core/storage';
@@ -29,6 +30,7 @@ export const mastra = new Mastra({
     stopScheduleTool,
     evaluateCaseReadinessTool,
     evaluateLegalLeadTool,
+    askUserTool,
   },
   workflows: { legalIntakeWorkflow },
   // 注册后 Scorer 才能被 Studio、Trace 和 Dataset Experiment 按 id 找到。

@@ -14,6 +14,11 @@ import {
   legalIntakeCaseStateEnvelopeSchema,
 } from '../src/mastra/legal-intake-schema.ts';
 import { evaluateLegalLeadQualification } from '../src/mastra/legal-lead-policy.ts';
+import {
+  getQuestionPresentation,
+  questionPresentationSchema,
+} from '../src/mastra/legal-question-presentation.ts';
+import { legalIntakeResponsePlanSchema } from '../src/mastra/workflows/legal-intake-workflow.ts';
 
 const completeConsent = {
   status: 'granted' as const,
@@ -56,6 +61,7 @@ test('lead qualification follows consent, details, contact method, and contact v
     consent: completeConsent,
   });
   assert.equal(region.nextField, 'qualification.region');
+  assert.equal(region.questionPresentation?.control, 'text');
 
   const contactMethod = evaluateLegalLeadQualification('ready_for_guidance', {
     qualification: {
@@ -67,6 +73,12 @@ test('lead qualification follows consent, details, contact method, and contact v
     consent: completeConsent,
   });
   assert.equal(contactMethod.nextField, 'contact.preferredMethod');
+  assert.equal(contactMethod.questionPresentation?.control, 'single_select');
+  assert.deepEqual(
+    contactMethod.questionPresentation?.options.map(option => option.label),
+    ['电话', '微信', '电子邮箱', '其他方式'],
+  );
+  assert.equal(contactMethod.responseRequirements[0].includes('ask_user'), true);
 
   const qualified = evaluateLegalLeadQualification('ready_for_guidance', {
     qualification: {
@@ -79,6 +91,53 @@ test('lead qualification follows consent, details, contact method, and contact v
     contact: { preferredMethod: 'phone', contactValue: 'test-only-number' },
   });
   assert.equal(qualified.decision, 'qualified');
+});
+
+test('question presentation maps closed questions to choices and open questions to text', () => {
+  const yesNo = getQuestionPresentation('divorce.livingTogether');
+  assert.equal(yesNo?.control, 'single_select');
+  assert.deepEqual(yesNo?.options.map(option => option.label), ['是', '否', '不确定']);
+
+  const approach = getQuestionPresentation('divorce.divorceApproach');
+  assert.equal(approach?.control, 'single_select');
+  assert.deepEqual(
+    approach?.options.map(option => option.label),
+    ['协议离婚', '诉讼离婚', '暂不确定'],
+  );
+
+  const duration = getQuestionPresentation('divorce.marriageDuration');
+  assert.deepEqual(duration, { control: 'text', options: [] });
+  assert.equal(getQuestionPresentation(null), null);
+});
+
+test('question presentation schema rejects invalid choice and text configurations', () => {
+  assert.equal(
+    questionPresentationSchema.safeParse({ control: 'single_select', options: [{ label: '只有一个' }] })
+      .success,
+    false,
+  );
+  assert.equal(
+    questionPresentationSchema.safeParse({
+      control: 'text',
+      options: [{ label: '文本题不应携带选项' }],
+    }).success,
+    false,
+  );
+});
+
+test('workflow response plan carries the UI contract for the next question', () => {
+  const parsed = legalIntakeResponsePlanSchema.parse({
+    mode: 'ask_question',
+    stage: 'core_facts',
+    nextField: 'divorce.hasChildren',
+    nextQuestion: '你们是否有需要安排的子女？',
+    questionPresentation: getQuestionPresentation('divorce.hasChildren'),
+    missingCriticalFacts: ['divorce.hasChildren'],
+    reason: '仍缺少关键信息。',
+    responseRequirements: ['调用 ask_user'],
+  });
+
+  assert.equal(parsed.questionPresentation?.control, 'single_select');
 });
 
 test('withdrawn consent stops lead collection even when contact data already exists', () => {
