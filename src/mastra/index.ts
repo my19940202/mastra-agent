@@ -1,6 +1,6 @@
-import './debug-instrumentation';
 import { Mastra } from '@mastra/core/mastra';
 import { askUserTool } from '@mastra/core/tools';
+import { MySQLStore } from '@mastra/mysql';
 import { LibSQLStore } from '@mastra/libsql';
 import { DuckDBStore } from '@mastra/duckdb';
 import { MastraCompositeStore } from '@mastra/core/storage';
@@ -18,6 +18,41 @@ import { createLegalLeadTool } from './tools/create-legal-lead-tool';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
 import { legalIntakeWorkflow } from './workflows/legal-intake-workflow';
 import { legalIntakeScorers } from './scorers/legal-intake-scorers';
+import { initializeLegalLeadSchema } from './legal-lead-store';
+import { getMysqlConnectionConfig } from './mysql-config';
+
+const mysqlStorageEnabled = process.env.MASTRA_STORAGE_BACKEND === 'mysql';
+if (process.env.NODE_ENV === 'production' && !mysqlStorageEnabled) {
+  throw new Error('Production requires MASTRA_STORAGE_BACKEND=mysql; refusing ephemeral local storage.');
+}
+
+function createMysqlStorage(): MySQLStore {
+  return new MySQLStore({
+    id: 'mastra-mysql-storage',
+    ...getMysqlConnectionConfig(),
+    max: Number(process.env.MYSQL_CONNECTION_LIMIT ?? 10),
+  });
+}
+
+const storage = mysqlStorageEnabled
+  ? createMysqlStorage()
+  : new MastraCompositeStore({
+      id: 'composite-storage',
+      default: new LibSQLStore({
+        id: 'mastra-storage',
+        url: process.env.TURSO_DATABASE_URL || 'file:./mastra.db',
+        authToken: process.env.TURSO_AUTH_TOKEN || undefined,
+      }),
+      domains: {
+        observability: await new DuckDBStore({
+          path: process.env.MASTRA_DUCKDB_PATH ?? 'mastra.duckdb',
+        }).getStore('observability'),
+      },
+    });
+
+if (mysqlStorageEnabled) {
+  await initializeLegalLeadSchema();
+}
 
 export const mastra = new Mastra({
   bundler: {
@@ -37,17 +72,11 @@ export const mastra = new Mastra({
   workflows: { legalIntakeWorkflow },
   // 注册后 Scorer 才能被 Studio、Trace 和 Dataset Experiment 按 id 找到。
   scorers: legalIntakeScorers,
-  storage: new MastraCompositeStore({
-    id: 'composite-storage',
-    default: new LibSQLStore({
-      id: 'mastra-storage',
-      url: process.env.TURSO_DATABASE_URL || 'file:./mastra.db',
-      authToken: process.env.TURSO_AUTH_TOKEN || undefined,
-    }),
-    domains: {
-      observability: await new DuckDBStore().getStore('observability'),
-    },
-  }),
+  storage,
+  server: {
+    host: process.env.MASTRA_HOST ?? 'localhost',
+    port: Number(process.env.PORT ?? 4111),
+  },
   observability: new Observability({
     configs: {
       default: {

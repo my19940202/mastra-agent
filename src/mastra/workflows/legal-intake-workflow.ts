@@ -77,6 +77,7 @@ export const collectLegalIntakeStep = createStep({
       lastPlan: null,
     });
 
+    if (process.env.NODE_ENV !== 'production') {
     // #region agent log
     fetch('http://127.0.0.1:7329/ingest/c35ee18f-ced6-4dfb-9939-f69ca388e4fa', {
       method: 'POST',
@@ -100,6 +101,7 @@ export const collectLegalIntakeStep = createStep({
       }),
     }).catch(() => {});
     // #endregion
+    }
 
     return readiness;
   },
@@ -206,6 +208,7 @@ const finalizeResponsePlanStep = createStep({
       throw new Error('Legal intake workflow completed without selecting a response branch.');
     }
 
+    if (process.env.NODE_ENV !== 'production') {
     // #region agent log
     fetch('http://127.0.0.1:7329/ingest/c35ee18f-ced6-4dfb-9939-f69ca388e4fa', {
       method: 'POST',
@@ -226,6 +229,7 @@ const finalizeResponsePlanStep = createStep({
       }),
     }).catch(() => {});
     // #endregion
+    }
 
     return plan;
   },

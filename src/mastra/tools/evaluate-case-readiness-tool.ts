@@ -316,6 +316,7 @@ function evaluateCaseReadinessUnlogged(
 }
 
 function logReadiness(result: ReadinessResult, scenario: unknown, handoffRequested: boolean): ReadinessResult {
+  if (process.env.NODE_ENV !== 'production') {
   // #region agent log
   fetch('http://127.0.0.1:7329/ingest/c35ee18f-ced6-4dfb-9939-f69ca388e4fa', {
     method: 'POST',
@@ -339,6 +340,7 @@ function logReadiness(result: ReadinessResult, scenario: unknown, handoffRequest
     }),
   }).catch(() => {});
   // #endregion
+  }
   return result;
 }
 

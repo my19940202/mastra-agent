@@ -207,6 +207,7 @@ export const familyLegalIntakeAgent = new Agent({
     },
     onStepFinish: event => {
       const toolCalls = Array.isArray(event.toolCalls) ? event.toolCalls : [];
+      if (process.env.NODE_ENV !== 'production') {
       // #region agent log
       fetch('http://127.0.0.1:7329/ingest/c35ee18f-ced6-4dfb-9939-f69ca388e4fa', {
         method: 'POST',
@@ -232,6 +233,7 @@ export const familyLegalIntakeAgent = new Agent({
         }),
       }).catch(() => {});
       // #endregion
+      }
     },
   },
   memory: new Memory({
