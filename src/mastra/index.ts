@@ -14,6 +14,7 @@ import { agent } from './agents/agent';
 import { familyLegalIntakeAgent } from './agents/family-legal-intake-agent';
 import { evaluateCaseReadinessTool } from './tools/evaluate-case-readiness-tool';
 import { evaluateLegalLeadTool } from './tools/evaluate-legal-lead-tool';
+import { createLegalLeadTool } from './tools/create-legal-lead-tool';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
 import { legalIntakeWorkflow } from './workflows/legal-intake-workflow';
 import { legalIntakeScorers } from './scorers/legal-intake-scorers';
@@ -30,6 +31,7 @@ export const mastra = new Mastra({
     stopScheduleTool,
     evaluateCaseReadinessTool,
     evaluateLegalLeadTool,
+    createLegalLeadTool,
     askUserTool,
   },
   workflows: { legalIntakeWorkflow },

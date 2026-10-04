@@ -10,6 +10,7 @@ import {
   legalIntakeSingleQuestionScorer,
 } from '../scorers/legal-intake-scorers';
 import { evaluateLegalLeadTool } from '../tools/evaluate-legal-lead-tool';
+import { createLegalLeadTool } from '../tools/create-legal-lead-tool';
 
 // Structured Working Memory 是 Agent 在当前会话中的“案件信息表”。
 // 与普通聊天记录相比，结构化字段更容易让模型判断哪些问题已经回答、哪些仍需追问。
@@ -61,7 +62,9 @@ const instructions = `
 - 线索选项规范化规则：希望律师联系→interested，暂不需要→not_interested；明确同意→granted，不同意→declined；一般安排→normal，近期→soon，紧急→urgent；尚未整理→none，已有一部分→some_available，基本齐全→mostly_ready；电话→phone，微信→wechat，电子邮箱→email，其他方式→other。
 - “希望律师联系”“愿意咨询”只代表 consultationIntent=interested，不等于授权。只有在完整展示用途、范围、拒绝权和撤回权后，用户明确表示同意，才把 leadConsent.status 写为 granted；同时记录 purposeVersion=legal-consultation-contact-v1、完整 authorizedScope 和用户明确同意的原话 userStatement。
 - 沉默、含糊回应、继续讲案件事实、预先勾选或一次性的“可以联系我”不得替代明确授权；不确定时继续保持 pending，只询问授权问题。
-- mayCollectContact=false 时，不得询问、记录或推断手机号、微信、邮箱等联系方式。用户提前主动提供时，也先完成授权说明；阶段 6 不执行数据库保存或实际联系。
+- mayCollectContact=false 时，不得询问、记录或推断手机号、微信、邮箱等联系方式。用户提前主动提供时，也先完成授权说明。
+- 只有 evaluateLegalLeadTool 返回 decision=qualified 且 mayCollectContact=true，用户已提供联系方式并有已授权的案件摘要后，才调用 createLegalLeadTool；原样传入完整线索状态、readiness 决定和已授权摘要。
+- createLegalLeadTool 失败时不要声称已保存；可以在同一持久对话中重试，重复调用会按当前 thread id 幂等处理。成功后只说明线索已进入人工审核队列，不得声称律师已分配、已联系或已建立委托关系。
 - 用户拒绝咨询、拒绝授权或撤回授权后，立即停止线索采集，不得反复劝说；这不影响继续提供一般法律信息。
 - 联系方式、授权记录和案件事实必须写入各自独立字段，不得把联系方式写进 confirmedFacts 或案件分支对象。
 
@@ -176,7 +179,7 @@ const instructions = `
 4. 再询问偏好的联系方式类型。
 5. 最后才收集对应的号码或账号。
 
-阶段 6 只完成内存中的资格判断和信息整理，不声称已经提交、保存、分配律师或建立委托关系。
+阶段 7 可以将已通过资格、授权与联系方式校验的线索保存到数据库并进入人工审核队列；不得声称律师已分配、已联系或建立委托关系。
 `;
 
 // Agent 是 Mastra 中负责“理解消息并决定如何回复”的核心对象。
@@ -249,6 +252,7 @@ export const familyLegalIntakeAgent = new Agent({
   tools: {
     ask_user: askUserTool,
     evaluateLegalLeadTool,
+    createLegalLeadTool,
   },
   // 阶段 5：每次运行后异步评分。评分不改变回复，只把质量信号写入 Trace/Storage。
   scorers: {
