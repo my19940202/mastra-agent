@@ -203,7 +203,7 @@ export const familyLegalIntakeAgent = new Agent({
     maxSteps: 8,
     autoResumeSuspendedTools: true,
     providerOptions: {
-      deepseek: { thinking: { type: 'disabled' } },
+      deepseek: { thinking: { type: 'enabled' } },
     },
     onStepFinish: event => {
       const toolCalls = Array.isArray(event.toolCalls) ? event.toolCalls : [];

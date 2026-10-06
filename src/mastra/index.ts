@@ -21,6 +21,7 @@ import { legalIntakeWorkflow } from './workflows/legal-intake-workflow';
 import { legalIntakeScorers } from './scorers/legal-intake-scorers';
 import { getLegalLead, initializeLegalLeadSchema, listLegalLeads } from './legal-lead-store';
 import { getMysqlConnectionConfig } from './mysql-config';
+import { miniappAgentRoute } from './miniapp-agent-route';
 
 const mysqlStorageEnabled = process.env.MASTRA_STORAGE_BACKEND === 'mysql';
 if (process.env.NODE_ENV === 'production' && !mysqlStorageEnabled) {
@@ -78,6 +79,7 @@ export const mastra = new Mastra({
     host: process.env.MASTRA_HOST ?? 'localhost',
     port: Number(process.env.PORT ?? 4111),
     apiRoutes: [
+      miniappAgentRoute,
       registerApiRoute('/legal-leads', {
         method: 'GET',
         requiresAuth: false,

@@ -10,7 +10,8 @@
     "start": "mastra start",
     "start:container": "node scripts/start-container.mjs",
     "test:legal-intake": "esbuild tests/legal-intake-scorers.test.ts --bundle --platform=node --format=cjs --outfile=/tmp/my-mastra-legal-intake-tests.cjs && node --test /tmp/my-mastra-legal-intake-tests.cjs",
-    "test:leads": "esbuild tests/legal-lead-store.test.ts --bundle --platform=node --format=esm --packages=external --outfile=.mastra/legal-lead-store-test.mjs && node --test .mastra/legal-lead-store-test.mjs"
+    "test:leads": "esbuild tests/legal-lead-store.test.ts --bundle --platform=node --format=esm --packages=external --outfile=.mastra/legal-lead-store-test.mjs && node --test .mastra/legal-lead-store-test.mjs",
+    "test:miniapp-agent": "esbuild tests/miniapp-agent-route.test.ts --bundle --platform=node --format=esm --packages=external --outfile=.mastra/miniapp-agent-route-test.mjs && node --test .mastra/miniapp-agent-route-test.mjs"
   },
   "keywords": [],
   "author": "",
