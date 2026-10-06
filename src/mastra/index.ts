@@ -1,4 +1,5 @@
 import { Mastra } from '@mastra/core/mastra';
+import { registerApiRoute } from '@mastra/core/server';
 import { askUserTool } from '@mastra/core/tools';
 import { MySQLStore } from '@mastra/mysql';
 import { LibSQLStore } from '@mastra/libsql';
@@ -18,7 +19,7 @@ import { createLegalLeadTool } from './tools/create-legal-lead-tool';
 import { startScheduleTool, stopScheduleTool } from './tools/schedule-tools';
 import { legalIntakeWorkflow } from './workflows/legal-intake-workflow';
 import { legalIntakeScorers } from './scorers/legal-intake-scorers';
-import { initializeLegalLeadSchema } from './legal-lead-store';
+import { getLegalLead, initializeLegalLeadSchema, listLegalLeads } from './legal-lead-store';
 import { getMysqlConnectionConfig } from './mysql-config';
 
 const mysqlStorageEnabled = process.env.MASTRA_STORAGE_BACKEND === 'mysql';
@@ -76,6 +77,21 @@ export const mastra = new Mastra({
   server: {
     host: process.env.MASTRA_HOST ?? 'localhost',
     port: Number(process.env.PORT ?? 4111),
+    apiRoutes: [
+      registerApiRoute('/legal-leads', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async c => c.json({ leads: await listLegalLeads() }),
+      }),
+      registerApiRoute('/legal-leads/:id', {
+        method: 'GET',
+        requiresAuth: false,
+        handler: async c => {
+          const lead = await getLegalLead(c.req.param('id'));
+          return lead ? c.json({ lead }) : c.json({ error: '线索不存在' }, 404);
+        },
+      }),
+    ],
   },
   observability: new Observability({
     configs: {

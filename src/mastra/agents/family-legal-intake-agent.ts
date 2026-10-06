@@ -198,12 +198,12 @@ export const familyLegalIntakeAgent = new Agent({
     ],
   },
   instructions,
-  model: 'deepseek/deepseek-v4-flash',
+  model: 'deepseek/deepseek-flash',
   defaultOptions: {
     maxSteps: 8,
     autoResumeSuspendedTools: true,
-    modelSettings: {
-      reasoning: 'none',
+    providerOptions: {
+      deepseek: { thinking: { type: 'disabled' } },
     },
     onStepFinish: event => {
       const toolCalls = Array.isArray(event.toolCalls) ? event.toolCalls : [];

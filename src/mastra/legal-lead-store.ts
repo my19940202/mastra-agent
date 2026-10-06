@@ -39,6 +39,48 @@ export type LegalLeadRecord = {
   duplicate: boolean;
 };
 
+type LeadRow = RowDataPacket & {
+  id: string;
+  status: LegalLeadStatus;
+  readiness_decision: string;
+  qualification_json: unknown;
+  consent_json: unknown;
+  contact_json: unknown;
+  case_summary: string;
+  created_at: Date | string;
+  updated_at: Date | string;
+};
+
+type AuditRow = RowDataPacket & {
+  id: string;
+  event: string;
+  from_status: string | null;
+  to_status: string;
+  actor: string;
+  details_json: unknown;
+  created_at: Date | string;
+};
+
+function timestamp(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+function jsonValue(value: unknown): unknown {
+  return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
+function mapLead(row: LeadRow) {
+  return {
+    id: row.id,
+    status: row.status,
+    readinessDecision: row.readiness_decision,
+    qualification: jsonValue(row.qualification_json),
+    caseSummary: row.case_summary,
+    createdAt: timestamp(row.created_at),
+    updatedAt: timestamp(row.updated_at),
+  };
+}
+
 const allowedTransitions: Record<LegalLeadStatus, LegalLeadStatus[]> = {
   pending_review: ['approved', 'withdrawn', 'closed'],
   approved: ['assigned', 'withdrawn', 'closed'],
@@ -129,6 +171,57 @@ export async function initializeLegalLeadSchema(): Promise<void> {
     throw error;
   });
   return schemaReady;
+}
+
+/** Read-only list for the mini program; contact and consent remain on the detail route. */
+export async function listLegalLeads() {
+  await initializeLegalLeadSchema();
+  const sql = `SELECT id, status, readiness_decision, qualification_json,
+    case_summary, created_at, updated_at
+    FROM legal_leads ORDER BY created_at DESC, id DESC`;
+  if (mysqlEnabled) {
+    const [rows] = await mysqlPool!.execute<LeadRow[]>(sql);
+    return rows.map(mapLead);
+  }
+  const result = await libsql!.execute(sql);
+  return result.rows.map(row => mapLead(row as unknown as LeadRow));
+}
+
+/** Read one lead and its audit history without changing either table. */
+export async function getLegalLead(id: string) {
+  await initializeLegalLeadSchema();
+  const leadSql = 'SELECT * FROM legal_leads WHERE id = ?';
+  const auditSql = `SELECT id, event, from_status, to_status, actor, details_json, created_at
+    FROM legal_lead_audit WHERE lead_id = ? ORDER BY created_at ASC, id ASC`;
+  let lead: LeadRow | undefined;
+  let audit: AuditRow[];
+  if (mysqlEnabled) {
+    const [leads] = await mysqlPool!.execute<LeadRow[]>(leadSql, [id]);
+    lead = leads[0];
+    if (!lead) return null;
+    const [rows] = await mysqlPool!.execute<AuditRow[]>(auditSql, [id]);
+    audit = rows;
+  } else {
+    const result = await libsql!.execute({ sql: leadSql, args: [id] });
+    lead = result.rows[0] as unknown as LeadRow | undefined;
+    if (!lead) return null;
+    const auditResult = await libsql!.execute({ sql: auditSql, args: [id] });
+    audit = auditResult.rows as unknown as AuditRow[];
+  }
+  return {
+    ...mapLead(lead),
+    consent: jsonValue(lead.consent_json),
+    contact: jsonValue(lead.contact_json),
+    audit: audit.map(row => ({
+      id: row.id,
+      event: row.event,
+      fromStatus: row.from_status,
+      toStatus: row.to_status,
+      actor: row.actor,
+      details: jsonValue(row.details_json),
+      createdAt: timestamp(row.created_at),
+    })),
+  };
 }
 
 export async function createLegalLeadRecord(input: {
