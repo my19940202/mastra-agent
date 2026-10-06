@@ -4,12 +4,13 @@ import {
   legalLeadStateInputSchema,
   leadQualificationStatusSchema,
 } from '../legal-lead-schema';
-import { readinessDecisionSchema } from './evaluate-case-readiness-tool';
 import {
   evaluateLegalLeadQualification,
   type LegalLeadPlan,
 } from '../legal-lead-policy';
 import { questionPresentationSchema } from '../legal-question-presentation';
+import { familyLegalIntakeInputSchema } from '../legal-intake-schema';
+import { evaluateCaseReadiness } from './evaluate-case-readiness-tool';
 
 export const legalLeadDecisionSchema = z.enum([
   'not_eligible',
@@ -35,18 +36,18 @@ export const legalLeadPlanSchema = z.object({
 
 export const legalLeadEvaluationInputSchema = z
   .object({
-    caseReadinessDecision: readinessDecisionSchema,
     leadState: legalLeadStateInputSchema,
+    caseState: familyLegalIntakeInputSchema,
   })
   .catchall(z.unknown())
-  .transform(({ caseReadinessDecision, leadState }) => ({ caseReadinessDecision, leadState }));
+  .transform(({ leadState, caseState }) => ({ leadState, caseState }));
 
 export const evaluateLegalLeadTool = createTool({
   id: 'evaluate-legal-lead',
   description:
-    '在案件信息基本充分后，确定律师咨询意愿、明确授权、资格信息和联系方式的下一步；未明确授权时严禁收集联系方式。',
+    '在支持场景与基本诉求明确后，确定自愿律师联系流程的下一步；未明确授权时严禁收集联系方式。',
   inputSchema: legalLeadEvaluationInputSchema,
   outputSchema: legalLeadPlanSchema,
-  execute: async ({ caseReadinessDecision, leadState }) =>
-    evaluateLegalLeadQualification(caseReadinessDecision, leadState),
+  execute: async ({ leadState, caseState }) =>
+    evaluateLegalLeadQualification(evaluateCaseReadiness(caseState).decision, leadState, caseState),
 });

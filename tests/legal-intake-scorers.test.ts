@@ -14,6 +14,7 @@ import {
   legalIntakeCaseStateEnvelopeSchema,
 } from '../src/mastra/legal-intake-schema.ts';
 import { evaluateLegalLeadQualification } from '../src/mastra/legal-lead-policy.ts';
+import { legalLeadStateInputSchema } from '../src/mastra/legal-lead-schema.ts';
 import {
   getQuestionPresentation,
   questionPresentationSchema,
@@ -33,10 +34,24 @@ const completeConsent = {
   userStatement: '我明确同意上述用途和范围',
 };
 
-test('lead collection is unavailable before case readiness and explicit consent', () => {
+const earlyCase = {
+  scenario: 'bride_price_dispute' as const,
+  userGoal: '了解彩礼返还问题',
+};
+
+test('lead collection waits for a known scenario and goal, not every case fact', () => {
   const notReady = evaluateLegalLeadQualification('needs_more_information', {});
   assert.equal(notReady.decision, 'not_eligible');
   assert.equal(notReady.mayCollectContact, false);
+
+  const early = evaluateLegalLeadQualification('needs_more_information', {}, earlyCase);
+  assert.equal(early.decision, 'ask_consultation_interest');
+  assert.equal(early.mayCollectContact, false);
+  assert.equal(evaluateLegalLeadQualification('safety_priority', {}, earlyCase).decision, 'not_eligible');
+  assert.equal(evaluateLegalLeadQualification('out_of_scope', {}, earlyCase).decision, 'not_eligible');
+  assert.equal(evaluateLegalLeadQualification('needs_more_information', {}, {
+    scenario: 'bride_price_dispute',
+  }).decision, 'not_eligible');
 
   const interestedWithoutConsent = evaluateLegalLeadQualification('ready_for_guidance', {
     qualification: { consultationIntent: 'interested' },
@@ -55,42 +70,84 @@ test('a granted flag without a complete consent record cannot unlock contact col
   assert.equal(result.mayCollectContact, false);
 });
 
-test('lead qualification follows consent, details, contact method, and contact value order', () => {
-  const region = evaluateLegalLeadQualification('ready_for_guidance', {
+test('lead qualification follows explicit consent then contact before optional details', () => {
+  const method = evaluateLegalLeadQualification('needs_more_information', {
     qualification: { consultationIntent: 'interested' },
     consent: completeConsent,
-  });
-  assert.equal(region.nextField, 'qualification.region');
-  assert.equal(region.questionPresentation?.control, 'text');
+  }, earlyCase);
+  assert.equal(method.nextField, 'contact.preferredMethod');
+  assert.equal(method.questionPresentation?.control, 'single_select');
 
-  const contactMethod = evaluateLegalLeadQualification('ready_for_guidance', {
+  const contactValue = evaluateLegalLeadQualification('needs_more_information', {
     qualification: {
       consultationIntent: 'interested',
-      region: '浙江杭州',
-      urgency: 'soon',
-      materialsStatus: 'some_available',
     },
     consent: completeConsent,
-  });
-  assert.equal(contactMethod.nextField, 'contact.preferredMethod');
-  assert.equal(contactMethod.questionPresentation?.control, 'single_select');
+    contact: { preferredMethod: 'phone' },
+  }, earlyCase);
+  assert.equal(contactValue.nextField, 'contact.contactValue');
   assert.deepEqual(
-    contactMethod.questionPresentation?.options.map(option => option.label),
+    method.questionPresentation?.options.map(option => option.label),
     ['电话', '微信', '电子邮箱', '其他方式'],
   );
-  assert.equal(contactMethod.responseRequirements[0].includes('ask_user'), true);
+  assert.equal(method.responseRequirements[0].includes('ask_user'), true);
 
-  const qualified = evaluateLegalLeadQualification('ready_for_guidance', {
+  const qualified = evaluateLegalLeadQualification('needs_more_information', {
     qualification: {
       consultationIntent: 'interested',
-      region: '浙江杭州',
-      urgency: 'soon',
-      materialsStatus: 'some_available',
     },
     consent: completeConsent,
     contact: { preferredMethod: 'phone', contactValue: 'test-only-number' },
-  });
+  }, earlyCase);
   assert.equal(qualified.decision, 'qualified');
+});
+
+test('invalid optional model fields are removed before strict workflow and lead checks', () => {
+  assert.equal(legalIntakeCaseStateEnvelopeSchema.safeParse({ handoffRequested: false }).success, false);
+  for (const purposeVersion of [null, 'wrong-version']) {
+    const parsed = legalIntakeCaseStateEnvelopeSchema.parse({
+      caseState: {
+        scenario: 'bride_price_dispute',
+        userGoal: '彩礼返还',
+        stage: null,
+        extraField: 'discard',
+        safety: { immediateDanger: true, extraField: 'discard' },
+        leadConsent: { status: 'granted', purposeVersion, authorizedScope: ['bad-scope'] },
+        leadQualification: { urgency: 'asap', consultationIntent: null },
+      },
+      handoffRequested: null,
+    });
+    assert.equal(parsed.caseState.leadConsent?.purposeVersion, undefined);
+    assert.equal(parsed.caseState.leadConsent?.status, 'granted');
+    assert.equal(parsed.caseState.leadConsent?.authorizedScope, undefined);
+    assert.equal(parsed.caseState.leadQualification?.urgency, undefined);
+    assert.equal(parsed.caseState.safety?.immediateDanger, '是');
+    assert.equal(parsed.handoffRequested, undefined);
+    assert.equal('extraField' in parsed.caseState, false);
+    assert.equal(evaluateLegalLeadQualification('needs_more_information', {
+      qualification: { consultationIntent: 'interested' },
+      consent: parsed.caseState.leadConsent,
+    }, earlyCase).decision, 'request_explicit_consent');
+  }
+
+  const cleanLead = legalLeadStateInputSchema.parse({
+    qualification: { consultationIntent: 'interested', urgency: null },
+    consent: { status: 'granted', purposeVersion: 'invalid' },
+  });
+  assert.equal(cleanLead.consent?.purposeVersion, undefined);
+  assert.equal(cleanLead.qualification?.urgency, undefined);
+  assert.equal(legalIntakeCaseStateEnvelopeSchema.safeParse({}).success, false);
+  assert.equal(legalLeadStateInputSchema.safeParse(null).success, false);
+});
+
+test('early lead flow respects refusal and withdrawal', () => {
+  assert.equal(evaluateLegalLeadQualification('needs_more_information', {
+    qualification: { consultationIntent: 'not_interested' },
+  }, earlyCase).decision, 'declined');
+  assert.equal(evaluateLegalLeadQualification('needs_more_information', {
+    qualification: { consultationIntent: 'interested' },
+    consent: { status: 'withdrawn' },
+  }, earlyCase).decision, 'declined');
 });
 
 test('question presentation maps closed questions to choices and open questions to text', () => {

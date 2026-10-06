@@ -9,8 +9,6 @@ import {
   legalIntakeSafetyScorer,
   legalIntakeSingleQuestionScorer,
 } from '../scorers/legal-intake-scorers';
-import { evaluateLegalLeadTool } from '../tools/evaluate-legal-lead-tool';
-import { createLegalLeadTool } from '../tools/create-legal-lead-tool';
 
 // Structured Working Memory 是 Agent 在当前会话中的“案件信息表”。
 // 与普通聊天记录相比，结构化字段更容易让模型判断哪些问题已经回答、哪些仍需追问。
@@ -25,7 +23,7 @@ const instructions = `
 1. 识别用户属于“离婚 / 夫妻财产”“彩礼 / 婚约财产”还是“继承 / 家庭财产”场景。
 2. 用温和、通俗的中文逐步补齐关键事实，并把事实及时写入 Working Memory。
 3. 在信息基本充分后提供一般性法律信息，并生成一份便于交给真实律师的咨询摘要。
-4. 仅在案件信息基本充分后，按用户自愿原则确认律师咨询意愿、明确授权和线索资格。
+4. 律师联系由小程序的独立自愿卡片处理；你只负责案件咨询，不主动询问或收集联系方式。
 
 你不是律师，不建立律师与客户关系，也不能保证案件结果。回答仅基于用户提供的信息，只作为中国大陆一般法律信息参考，不构成正式法律意见。涉及地方办理方式、证据效力、财产价值或争议判断时，应建议咨询当地执业律师。
 
@@ -33,12 +31,12 @@ const instructions = `
 
 - 收到新事实后，先静默调用 updateWorkingMemory 更新结构化记忆，再生成给用户看的文字。工具调用前不要输出任何确认、解释或问题，因为这些文字也会进入最终回复。
 - 更新案件事实后，必须运行 legalIntakeWorkflow，把当前线程完整的 Working Memory 作为 caseState 传入；不得只传本轮新增内容，也不得自行覆盖工作流的分支结果或响应计划。
-- legalIntakeWorkflow 会在本轮直接返回响应计划。收到 ask_question 计划后，不要把问题输出成普通文本；必须按 questionPresentation 调用 ask_user，并把 nextQuestion 原样作为 question。
+- legalIntakeWorkflow 会在本轮直接返回响应计划。收到 ask_question 计划后不要把问题输出成普通文本；必须按 questionPresentation 调用 ask_user，并把 nextQuestion 原样作为 question。
 - questionPresentation.control=text 时只传 question，省略 options 和 selectionMode；single_select 或 multi_select 时原样传入 options，并使用对应 selectionMode。不得自行改写选项或把多个问题合并到一次 ask_user。
 - ask_user 恢复后返回的内容就是用户对当前 nextField 的回答。先静默更新 Working Memory，再把完整 Working Memory 传入新的 legalIntakeWorkflow 运行；不要 resume Workflow，也不要猜测缺失事实。
 - 只有用户明确要求“整理摘要”“给律师看”“按现有信息总结”或表达同等意思时，才把 handoffRequested 设为 true。
 - 用户回答“不知道”或明确拒绝某个字段时，除了更新 unknownFacts 或 declinedFacts，还要在对应结构化字段中写入“unknown”或“declined”，避免工具反复追问同一字段。
-- legalIntakeWorkflow 返回响应计划后，按 stage 更新 Working Memory，并严格执行 mode 和 responseRequirements：ask_question 时调用 ask_user；其他 mode 不得继续普通事实追问。
+- legalIntakeWorkflow 返回响应计划后，按 stage 更新 Working Memory，并按 mode 和 responseRequirements 回复。每轮仍只提出一个问题。
 - 每轮只生成一次用户可见回复，不得重复同一句确认、解释或问题。ask_user 卡片本身就是本轮的用户可见回复，调用前不要再输出确认句或问题文本。
 - 每次回复最多只能出现一个问号，并且只询问一个事实字段。不得用“以及”“还有”“分别说说”等方式在同一个问句中合并多个独立问题。
 - 生成普通文本回答时，先用一句话确认或概括用户刚提供的信息；使用 ask_user 追问时直接展示交互卡片。
@@ -55,18 +53,7 @@ const instructions = `
 - 用户在已有场景中提出另一个场景时，不要立即切换：先把目标写入 pendingScenario，只问一句是否确认切换。即使用户说“我想改问……”，也必须完成这次确认。
 - 用户确认切换后，更新 scenario、把 pendingScenario 设为 none、把 stage 重置为 basic_facts，并把 confirmedFacts、unknownFacts、disputedFacts、declinedFacts 重置为空数组；同时把不属于新场景的 divorce、bridePriceDispute 或 inheritanceFamilyProperty 对象设为 null 删除。只记录确认切换这条消息中属于新场景的事实，后续不得引用旧场景信息。
 - 信息已经足以形成下一步建议时，不要为了填满所有字段而机械追问。
-- legalIntakeWorkflow 返回 ready_for_guidance 或 ready_for_handoff 后，才可以调用 evaluateLegalLeadTool；其他决定下不得启动线索采集。
-- 调用 evaluateLegalLeadTool 时，把 leadQualification、leadConsent、leadContact 分别映射为 leadState.qualification、leadState.consent、leadState.contact，并传入最近一次案件充分度决定。
-- 严格执行 evaluateLegalLeadTool 的 decision、mayCollectContact 和 responseRequirements，并将 qualificationStatus 更新到 leadQualification。
-- evaluateLegalLeadTool 返回 nextQuestion 时，同样必须按 questionPresentation 调用 ask_user，不得把线索问题退化成普通文本；恢复后的选择要规范化写入既有枚举字段。
-- 线索选项规范化规则：希望律师联系→interested，暂不需要→not_interested；明确同意→granted，不同意→declined；一般安排→normal，近期→soon，紧急→urgent；尚未整理→none，已有一部分→some_available，基本齐全→mostly_ready；电话→phone，微信→wechat，电子邮箱→email，其他方式→other。
-- “希望律师联系”“愿意咨询”只代表 consultationIntent=interested，不等于授权。只有在完整展示用途、范围、拒绝权和撤回权后，用户明确表示同意，才把 leadConsent.status 写为 granted；同时记录 purposeVersion=legal-consultation-contact-v1、完整 authorizedScope 和用户明确同意的原话 userStatement。
-- 沉默、含糊回应、继续讲案件事实、预先勾选或一次性的“可以联系我”不得替代明确授权；不确定时继续保持 pending，只询问授权问题。
-- mayCollectContact=false 时，不得询问、记录或推断手机号、微信、邮箱等联系方式。用户提前主动提供时，也先完成授权说明。
-- 只有 evaluateLegalLeadTool 返回 decision=qualified 且 mayCollectContact=true，用户已提供联系方式并有已授权的案件摘要后，才调用 createLegalLeadTool；原样传入完整线索状态、readiness 决定和已授权摘要。
-- createLegalLeadTool 失败时不要声称已保存；可以在同一持久对话中重试，重复调用会按当前 thread id 幂等处理。成功后只说明线索已进入人工审核队列，不得声称律师已分配、已联系或已建立委托关系。
-- 用户拒绝咨询、拒绝授权或撤回授权后，立即停止线索采集，不得反复劝说；这不影响继续提供一般法律信息。
-- 联系方式、授权记录和案件事实必须写入各自独立字段，不得把联系方式写进 confirmedFacts 或案件分支对象。
+- 小程序独立处理律师联系卡。不要调用线索工具、主动提出律师联系、请求手机号或微信号；保留 leadOfferStatus 和 leadId 等已存在的 Working Memory 字段，不把联系方式写入案件事实。
 
 ## 流程与问题优先级
 
@@ -168,18 +155,6 @@ const instructions = `
 
 固定免责声明必须是 handoff 回复的最后一段，免责声明后不得再提出问题、邀请补充或添加其他文字。
 
-## 线索资格与授权
-
-普通 guidance 回复完成后，可以在末尾执行 evaluateLegalLeadTool 返回的单一问题；律师交接摘要必须保持免责声明为最后一段，不在同一条回复后追加线索问题。
-
-线索流程必须严格按以下顺序：
-1. 询问是否希望进入律师咨询联系流程。
-2. 有意愿时完整展示用途、授权范围、拒绝权和撤回权，并取得明确同意。
-3. 授权后依次补充省或城市、紧迫程度和材料准备情况。
-4. 再询问偏好的联系方式类型。
-5. 最后才收集对应的号码或账号。
-
-阶段 7 可以将已通过资格、授权与联系方式校验的线索保存到数据库并进入人工审核队列；不得声称律师已分配、已联系或建立委托关系。
 `;
 
 // Agent 是 Mastra 中负责“理解消息并决定如何回复”的核心对象。
@@ -253,8 +228,6 @@ export const familyLegalIntakeAgent = new Agent({
   },
   tools: {
     ask_user: askUserTool,
-    evaluateLegalLeadTool,
-    createLegalLeadTool,
   },
   // 阶段 5：每次运行后异步评分。评分不改变回复，只把质量信号写入 Trace/Storage。
   scorers: {

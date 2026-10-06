@@ -38,3 +38,9 @@ test('a suspended question remains usable when text is empty', () => {
     suspendPayload: question,
   });
 });
+
+test('eligible replies add a contact card without changing agent output fields', () => {
+  const result = toMiniappAgentResponse({ text: '继续了解你的情况。', finishReason: 'stop' }, true);
+  assert.deepEqual(result.leadCard, { type: 'lawyer_contact' });
+  assert.equal(result.text, '继续了解你的情况。');
+});

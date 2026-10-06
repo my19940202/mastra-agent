@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sanitizeOptionalModelFields } from './model-input-sanitizer';
 
 export const consultationIntentSchema = z.enum(['unknown', 'interested', 'not_interested']);
 export const leadUrgencySchema = z.enum(['unknown', 'normal', 'soon', 'urgent']);
@@ -59,13 +60,20 @@ export const legalLeadStateSchema = z.object({
   contact: legalLeadContactSchema.optional(),
 });
 
-export const legalLeadStateInputSchema = legalLeadStateSchema
+const permissiveLegalLeadStateInputSchema = legalLeadStateSchema
   .extend({
     qualification: legalLeadQualificationSchema.catchall(z.unknown()).optional(),
     consent: legalLeadConsentSchema.catchall(z.unknown()).optional(),
     contact: legalLeadContactSchema.catchall(z.unknown()).optional(),
   })
-  .catchall(z.unknown())
+  .catchall(z.unknown());
+
+export const legalLeadStateInputSchema = z
+  .preprocess(value => sanitizeOptionalModelFields(value, legalLeadStateSchema, {
+    qualification: legalLeadQualificationSchema,
+    consent: legalLeadConsentSchema,
+    contact: legalLeadContactSchema,
+  }), permissiveLegalLeadStateInputSchema)
   .transform(value => legalLeadStateSchema.parse(value));
 
 export type LegalLeadState = z.infer<typeof legalLeadStateSchema>;

@@ -5,12 +5,13 @@ import {
 } from '../legal-lead-schema';
 import { evaluateLegalLeadQualification } from '../legal-lead-policy';
 import { createLegalLeadRecord } from '../legal-lead-store';
-import { readinessDecisionSchema } from './evaluate-case-readiness-tool';
+import { evaluateCaseReadiness } from './evaluate-case-readiness-tool';
+import { familyLegalIntakeInputSchema } from '../legal-intake-schema';
 
-const createLegalLeadInputSchema = z.object({
-  readinessDecision: readinessDecisionSchema,
+export const createLegalLeadInputSchema = z.object({
   leadState: legalLeadStateInputSchema,
-  caseSummary: z.string().trim().min(1).max(20_000),
+  caseState: familyLegalIntakeInputSchema,
+  caseSummary: z.string().trim().min(1).max(20_000).optional(),
 });
 
 const createLegalLeadOutputSchema = z.object({
@@ -21,7 +22,7 @@ const createLegalLeadOutputSchema = z.object({
   message: z.string(),
 });
 
-function isValidContact(method: string, rawValue: string): boolean {
+export function isValidContact(method: string, rawValue: string): boolean {
   const value = rawValue.trim();
   if (value.length < 3 || value.length > 254 || /[\r\n\0]/.test(value)) return false;
   switch (method) {
@@ -41,14 +42,12 @@ function isValidContact(method: string, rawValue: string): boolean {
 export const createLegalLeadTool = createTool({
   id: 'create-legal-lead',
   description:
-    '在案件 readiness 通过、用户明确希望律师联系、完成明确授权及资格信息、联系方式校验通过后，幂等保存线索并进入人工审核队列。只传已授权的案件摘要；不得承诺律师已分配或已联系。',
+    '在场景和诉求明确、用户希望律师联系并明确授权、联系方式有效后，幂等保存待审核线索。案件事实可尚未补齐。',
   inputSchema: createLegalLeadInputSchema,
   outputSchema: createLegalLeadOutputSchema,
-  execute: async ({ readinessDecision, leadState, caseSummary }, context) => {
-    if (!['ready_for_guidance', 'ready_for_handoff'].includes(readinessDecision)) {
-      throw new Error('案件尚未达到可交接状态，不能创建线索。');
-    }
-    const qualificationPlan = evaluateLegalLeadQualification(readinessDecision, leadState);
+  execute: async ({ leadState, caseState, caseSummary }, context) => {
+    const readinessDecision = evaluateCaseReadiness(caseState).decision;
+    const qualificationPlan = evaluateLegalLeadQualification(readinessDecision, leadState, caseState);
     if (qualificationPlan.decision !== 'qualified' || !qualificationPlan.mayCollectContact) {
       throw new Error('线索资格或明确授权条件不完整，未保存任何联系方式。');
     }
@@ -56,9 +55,6 @@ export const createLegalLeadTool = createTool({
     const { qualification, consent, contact } = leadState;
     if (
       qualification?.consultationIntent !== 'interested' ||
-      !qualification.region?.trim() ||
-      !qualification.urgency || qualification.urgency === 'unknown' ||
-      !qualification.materialsStatus || qualification.materialsStatus === 'unknown' ||
       !consent?.authorizedScope?.includes('case_summary') ||
       !contact?.preferredMethod || contact.preferredMethod === 'unknown' ||
       !contact.contactValue || !isValidContact(contact.preferredMethod, contact.contactValue)
@@ -76,7 +72,9 @@ export const createLegalLeadTool = createTool({
       qualification,
       consent,
       contact: { ...contact, contactValue: contact.contactValue.trim() },
-      caseSummary: caseSummary.trim(),
+      caseSummary: readinessDecision === 'needs_more_information'
+        ? `案件事实尚未补齐。场景：${caseState.scenario}；基本诉求：${caseState.userGoal?.trim()}。${(caseState.confirmedFacts ?? []).join('；')}`.slice(0, 20_000)
+        : (caseSummary?.trim() || `场景：${caseState.scenario}；基本诉求：${caseState.userGoal?.trim() || '待补充'}`).slice(0, 20_000),
     });
     return {
       created: !record.duplicate,

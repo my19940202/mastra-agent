@@ -1,4 +1,5 @@
 import type { LegalLeadState } from './legal-lead-schema';
+import type { FamilyLegalIntakeMemory } from './legal-intake-schema';
 import {
   getQuestionPresentation,
   type QuestionPresentation,
@@ -96,10 +97,15 @@ function plan(
 export function evaluateLegalLeadQualification(
   caseReadinessDecision: CaseReadinessDecision,
   state: LegalLeadState,
+  caseState?: FamilyLegalIntakeMemory,
 ): LegalLeadPlan {
-  if (!['ready_for_guidance', 'ready_for_handoff'].includes(caseReadinessDecision)) {
+  const earlyEligible = caseReadinessDecision === 'needs_more_information' &&
+    caseState?.scenario !== undefined &&
+    !['unknown', 'out_of_scope'].includes(caseState.scenario) &&
+    hasValue(caseState.userGoal);
+  if (!earlyEligible && !['ready_for_guidance', 'ready_for_handoff'].includes(caseReadinessDecision)) {
     return plan('not_eligible', 'not_eligible', null, null,
-      '案件仍需补充事实、存在安全优先事项或不在服务范围内，当前不进入线索采集。', false,
+      '场景和基本诉求尚未明确，存在安全优先事项或不在服务范围内，当前不进入线索采集。', false,
       ['继续原案件流程', '不得询问或暗示用户提供联系方式']);
   }
 
@@ -108,20 +114,16 @@ export function evaluateLegalLeadQualification(
   const contact = state.contact ?? {};
   const intent = qualification.consultationIntent ?? 'unknown';
 
+  if (intent === 'not_interested' || consent.status === 'declined' || consent.status === 'withdrawn') {
+    return plan('declined', 'declined', null, null,
+      consent.status === 'withdrawn' ? '用户已撤回授权。' : '用户不希望进入律师联系流程或未同意线索用途。', false,
+      ['确认尊重用户选择', '停止线索采集，不再索取授权或联系方式']);
+  }
   if (intent === 'unknown') {
     return plan('ask_consultation_interest', 'awaiting_interest',
       'qualification.consultationIntent', questions.consultationIntent,
-      '案件信息已基本充分，但用户尚未表达是否希望进入律师联系流程。', false,
+      '场景和基本诉求已明确，但用户尚未表达是否希望进入律师联系流程。', false,
       ['原样使用 nextQuestion', '明确这是可选项，不影响继续获取一般法律信息']);
-  }
-  if (intent === 'not_interested') {
-    return plan('declined', 'declined', null, null, '用户不希望进入律师联系流程。', false,
-      ['确认尊重用户选择', '停止线索采集，不再索取授权或联系方式']);
-  }
-  if (consent.status === 'declined' || consent.status === 'withdrawn') {
-    return plan('declined', 'declined', null, null,
-      consent.status === 'withdrawn' ? '用户已撤回授权。' : '用户未同意线索用途和授权范围。', false,
-      ['确认停止线索采集', '不得继续询问联系方式']);
   }
   if (!hasCompleteConsentRecord(state)) {
     return plan('request_explicit_consent', 'awaiting_consent', 'consent.status', questions.consent,
@@ -130,25 +132,9 @@ export function evaluateLegalLeadQualification(
         : '用户有律师咨询意愿，但尚未对具体用途和范围作出明确授权。', false,
       ['完整说明用途、范围、拒绝权和撤回权', '原样使用 nextQuestion', '沉默或含糊回答不得视为同意']);
   }
-  if (!hasValue(qualification.region)) {
-    return plan('collect_qualification_detail', 'collecting_details', 'qualification.region', questions.region,
-      '已获得明确授权，需要补充服务地区。', true,
-      ['原样使用 nextQuestion', '只要求省或城市，不要求完整住址']);
-  }
-  if (!qualification.urgency || qualification.urgency === 'unknown') {
-    return plan('collect_qualification_detail', 'collecting_details', 'qualification.urgency', questions.urgency,
-      '已获得明确授权，需要了解联系紧迫程度。', true,
-      ['原样使用 nextQuestion', '不得制造紧迫感或承诺联系时间']);
-  }
-  if (!qualification.materialsStatus || qualification.materialsStatus === 'unknown') {
-    return plan('collect_qualification_detail', 'collecting_details',
-      'qualification.materialsStatus', questions.materialsStatus,
-      '已获得明确授权，需要了解材料准备情况。', true,
-      ['原样使用 nextQuestion', '不要求用户在对话中上传证件原件或完整敏感材料']);
-  }
   if (!contact.preferredMethod || contact.preferredMethod === 'unknown') {
     return plan('collect_contact_method', 'collecting_details', 'contact.preferredMethod', questions.preferredMethod,
-      '授权和资格信息已具备，可以询问用户偏好的联系方式类型。', true,
+      '已获得明确授权，可以询问用户偏好的联系方式类型。', true,
       ['原样使用 nextQuestion', '本轮不要同时索取具体号码或账号']);
   }
   if (!hasValue(contact.contactValue)) {
@@ -158,6 +144,6 @@ export function evaluateLegalLeadQualification(
   }
 
   return plan('qualified', 'qualified', null, null,
-    '案件充分度、咨询意愿、明确授权、资格信息和联系方式均已具备。', true,
-    ['说明当前仅完成线索信息整理，尚未创建委托关系', '阶段 6 不执行数据库保存或实际外部联系']);
+    '咨询意愿、明确授权和联系方式均已具备，可先保存待审核线索。', true,
+    ['尽早保存待审核线索', '说明尚未分配律师或建立委托关系']);
 }

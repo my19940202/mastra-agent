@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sanitizeOptionalModelFields } from './model-input-sanitizer';
 import {
   legalLeadConsentSchema,
   legalLeadContactSchema,
@@ -109,12 +110,14 @@ export const familyLegalIntakeMemorySchema = z.object({
   leadQualification: legalLeadQualificationSchema.optional(),
   leadConsent: legalLeadConsentSchema.optional(),
   leadContact: legalLeadContactSchema.optional(),
+  leadId: z.string().optional(),
+  leadOfferStatus: z.enum(['declined', 'submitted']).optional(),
 });
 
 // LLM 生成 Tool 参数时，偶尔会补出 childrenCount、childGender 等合理但未声明的键。
 // Tool 边界采用“宽进严出”：输入阶段允许额外键，transform 后立即按正式 Memory Schema
 // 清洗并丢弃未知字段，避免一次多余键导致整个 Workflow 无法启动或恢复。
-export const familyLegalIntakeInputSchema = familyLegalIntakeMemorySchema
+const permissiveFamilyLegalIntakeInputSchema = familyLegalIntakeMemorySchema
   .extend({
     safety: safetySchema.catchall(z.unknown()).nullable().optional(),
     divorce: divorceSchema.catchall(z.unknown()).nullable().optional(),
@@ -127,15 +130,28 @@ export const familyLegalIntakeInputSchema = familyLegalIntakeMemorySchema
     leadConsent: legalLeadConsentSchema.catchall(z.unknown()).optional(),
     leadContact: legalLeadContactSchema.catchall(z.unknown()).optional(),
   })
-  .catchall(z.unknown())
+  .catchall(z.unknown());
+
+export const familyLegalIntakeInputSchema = z
+  .preprocess(value => sanitizeOptionalModelFields(value, familyLegalIntakeMemorySchema, {
+    safety: safetySchema,
+    divorce: divorceSchema,
+    bridePriceDispute: bridePriceDisputeSchema,
+    inheritanceFamilyProperty: inheritanceFamilyPropertySchema,
+    leadQualification: legalLeadQualificationSchema,
+    leadConsent: legalLeadConsentSchema,
+    leadContact: legalLeadContactSchema,
+  }), permissiveFamilyLegalIntakeInputSchema)
   .transform(value => familyLegalIntakeMemorySchema.parse(value));
 
 export const legalIntakeCaseStateEnvelopeSchema = z
-  .object({
+  .preprocess(value => sanitizeOptionalModelFields(value, z.object({
     caseState: familyLegalIntakeInputSchema,
     handoffRequested: z.boolean().optional(),
-  })
-  .catchall(z.unknown())
+  })), z.object({
+    caseState: familyLegalIntakeInputSchema,
+    handoffRequested: z.boolean().optional(),
+  }).catchall(z.unknown()))
   .transform(({ caseState, handoffRequested }) => ({ caseState, handoffRequested }));
 
 export type FamilyLegalIntakeMemory = z.infer<typeof familyLegalIntakeMemorySchema>;
