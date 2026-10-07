@@ -1,4 +1,4 @@
-/** Verifies the read-only lead queries against the local LibSQL adapter. */
+/** Tests lead storage, contact-card decisions, and legacy thread state migration. */
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,38 @@ process.env.TURSO_DATABASE_URL = `file:${join(directory, 'leads.db')}`;
 
 const { createLegalLeadRecord, getLegalLead, listLegalLeads } = await import('../src/mastra/legal-lead-store.ts');
 const { createLegalLeadTool, createLegalLeadInputSchema } = await import('../src/mastra/tools/create-legal-lead-tool.ts');
-const { canOfferLeadCard, handleLeadCard } = await import('../src/mastra/miniapp-lead.ts');
+const { canOfferLeadCard, handleLeadCard, readLeadCaseState } = await import('../src/mastra/miniapp-lead.ts');
+const { readLeadThreadState } = await import('../src/mastra/lead-thread-state.ts');
+
+test('existing lead decisions migrate from working memory to thread metadata', async () => {
+  let metadata: Record<string, unknown> = { titleHint: 'keep' };
+  const memory = {
+    getThreadById: async () => ({ metadata }),
+    updateThread: async ({ metadata: next }: { metadata: Record<string, unknown> }) => { metadata = next; },
+    getWorkingMemory: async () => JSON.stringify({
+      scenario: 'divorce', leadOfferStatus: 'submitted', leadId: 'old-lead',
+    }),
+  };
+  const ids = { thread: 'old-thread', resource: 'old-resource' };
+  assert.deepEqual(await readLeadThreadState(memory, ids), {
+    status: 'submitted', leadId: 'old-lead',
+  });
+  assert.deepEqual(metadata.legalLeadCard, { status: 'submitted', leadId: 'old-lead' });
+  assert.equal(metadata.titleHint, 'keep');
+});
+
+test('malformed legacy memory keeps valid case facts without accepting a fake lead status', async () => {
+  const memory = {
+    getThreadById: async () => ({ metadata: {} }),
+    updateThread: async () => { throw new Error('unexpected migration'); },
+    getWorkingMemory: async () => JSON.stringify({
+      scenario: 'divorce', userGoal: '离婚', stage: null, leadOfferStatus: 'offered',
+    }),
+  };
+  const ids = { thread: 'malformed-thread', resource: 'malformed-resource' };
+  assert.deepEqual(await readLeadCaseState(memory, ids), { scenario: 'divorce', userGoal: '离婚' });
+  assert.deepEqual(await readLeadThreadState(memory, ids), {});
+});
 
 test('lists leads and returns lead details with audit records', async () => {
   try {
@@ -90,11 +121,17 @@ test('lists leads and returns lead details with audit records', async () => {
 
     function fakeMemory(initial = cardCase, turns = 3) {
       let stored = JSON.stringify(initial);
+      let metadata: Record<string, unknown> = {};
       return {
         getWorkingMemory: async () => stored,
         updateWorkingMemory: async ({ workingMemory }: { workingMemory: string }) => { stored = workingMemory; },
+        getThreadById: async () => ({ metadata }),
+        updateThread: async ({ metadata: next }: { metadata: Record<string, unknown> }) => {
+          metadata = next;
+        },
         recall: async () => ({ messages: Array.from({ length: turns }, () => ({ role: 'user' })) }),
         state: () => JSON.parse(stored),
+        leadState: () => metadata.legalLeadCard as { status?: string; leadId?: string } | undefined,
       };
     }
 
@@ -113,7 +150,8 @@ test('lists leads and returns lead details with audit records', async () => {
     });
     assert.equal(submitted.status, 'submitted');
     assert.equal(submitted.created, true);
-    assert.equal(cardMemory.state().leadId, submitted.leadId);
+    assert.equal(cardMemory.leadState()?.leadId, submitted.leadId);
+    assert.equal(cardMemory.state().leadId, undefined);
     const duplicate = await handleLeadCard(cardMemory, {
       ...cardInput, action: 'submit', method: 'phone', contactValue: '13800138000', consent: true,
     });
@@ -138,7 +176,7 @@ test('lists leads and returns lead details with audit records', async () => {
     });
     assert.equal(withdrawn.status, 'withdrawn');
     assert.equal((await getLegalLead(wechat.leadId!))?.status, 'withdrawn');
-    assert.equal(canOfferLeadCard(wechatMemory.state(), 4), false);
+    assert.equal(canOfferLeadCard(wechatMemory.state(), 4, wechatMemory.leadState()), false);
 
     const declinedMemory = fakeMemory();
     const declined = await handleLeadCard(declinedMemory, {
@@ -146,7 +184,7 @@ test('lists leads and returns lead details with audit records', async () => {
       action: 'decline',
     });
     assert.equal(declined.status, 'declined');
-    assert.equal(canOfferLeadCard(declinedMemory.state(), 4), false);
+    assert.equal(canOfferLeadCard(declinedMemory.state(), 4, declinedMemory.leadState()), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

@@ -1,3 +1,4 @@
+/** Defines legal case state and sanitizes model input before strict validation. */
 import { z } from 'zod';
 import { sanitizeOptionalModelFields } from './model-input-sanitizer';
 import {
@@ -110,9 +111,22 @@ export const familyLegalIntakeMemorySchema = z.object({
   leadQualification: legalLeadQualificationSchema.optional(),
   leadConsent: legalLeadConsentSchema.optional(),
   leadContact: legalLeadContactSchema.optional(),
-  leadId: z.string().optional(),
-  leadOfferStatus: z.enum(['declined', 'submitted']).optional(),
 });
+
+// The model-facing memory accepts malformed optional values at its tool boundary,
+// then stores only fields that pass the strict case schema above.
+export const familyLegalWorkingMemorySchema = z.preprocess(
+  value => sanitizeOptionalModelFields(value, familyLegalIntakeMemorySchema, {
+    safety: safetySchema,
+    divorce: divorceSchema,
+    bridePriceDispute: bridePriceDisputeSchema,
+    inheritanceFamilyProperty: inheritanceFamilyPropertySchema,
+    leadQualification: legalLeadQualificationSchema,
+    leadConsent: legalLeadConsentSchema,
+    leadContact: legalLeadContactSchema,
+  }),
+  familyLegalIntakeMemorySchema,
+);
 
 // LLM 生成 Tool 参数时，偶尔会补出 childrenCount、childGender 等合理但未声明的键。
 // Tool 边界采用“宽进严出”：输入阶段允许额外键，transform 后立即按正式 Memory Schema

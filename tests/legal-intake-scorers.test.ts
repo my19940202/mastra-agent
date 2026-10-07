@@ -1,5 +1,7 @@
+/** Tests legal intake schemas, workflow behavior, and response quality rules. */
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Memory } from '@mastra/memory';
 import {
   countQuestions,
   extractScorerText,
@@ -11,8 +13,28 @@ import {
 import { mergeLegalIntakeCaseState } from '../src/mastra/legal-intake-state.ts';
 import {
   familyLegalIntakeInputSchema,
+  familyLegalWorkingMemorySchema,
   legalIntakeCaseStateEnvelopeSchema,
 } from '../src/mastra/legal-intake-schema.ts';
+
+test('working memory tool drops malformed optional model fields', async () => {
+  const memory = new Memory({
+    options: { workingMemory: { enabled: true, scope: 'thread', schema: familyLegalWorkingMemorySchema } },
+  });
+  const tool = memory.listTools({}).updateWorkingMemory;
+  const validated = await tool.inputSchema['~standard'].validate({
+    memory: {
+      scenario: 'divorce', userGoal: '离婚', stage: null,
+      pendingScenario: 'invalid', leadOfferStatus: 'offered', leadId: 'invented',
+      divorce: { hasChildren: '有', sharedDebt: null },
+    },
+  });
+  assert.equal('issues' in validated, false);
+  if ('issues' in validated) return;
+  assert.deepEqual(validated.value, {
+    memory: { scenario: 'divorce', userGoal: '离婚', divorce: { hasChildren: '有' } },
+  });
+});
 import { evaluateLegalLeadQualification } from '../src/mastra/legal-lead-policy.ts';
 import { legalLeadStateInputSchema } from '../src/mastra/legal-lead-schema.ts';
 import {
