@@ -20,7 +20,7 @@ rsync -a \
 
 du -sh "$DEPLOY_DIR"
 test -f "$DEPLOY_DIR/Dockerfile"
-test -f "$DEPLOY_DIR/package-lock.json"
+test -f "$DEPLOY_DIR/pnpm-lock.yaml"
 test -f "$DEPLOY_DIR/scripts/start-container.mjs"
 test ! -d "$DEPLOY_DIR/node_modules"
 test ! -d "$DEPLOY_DIR/.mastra"
