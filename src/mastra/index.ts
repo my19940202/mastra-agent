@@ -1,3 +1,4 @@
+import { consultationHistoryRoutes } from './consultation-history';
 import { Mastra } from '@mastra/core/mastra';
 import { registerApiRoute } from '@mastra/core/server';
 import { askUserTool } from '@mastra/core/tools';
@@ -79,6 +80,7 @@ export const mastra = new Mastra({
     host: process.env.MASTRA_HOST ?? 'localhost',
     port: Number(process.env.PORT ?? 4111),
     apiRoutes: [
+      ...consultationHistoryRoutes,
       miniappAgentRoute,
       miniappLeadCardRoute,
       registerApiRoute('/legal-leads', {
@@ -99,7 +101,7 @@ export const mastra = new Mastra({
   observability: new Observability({
     configs: {
       default: {
-        serviceName: 'mastra',
+        serviceName: 'family-legal-agent',
         exporters: [new MastraStorageExporter(), new MastraPlatformExporter()],
         spanOutputProcessors: [new SensitiveDataFilter()],
       },

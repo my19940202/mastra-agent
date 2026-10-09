@@ -29,10 +29,18 @@ docker build -t family-legal-agent:local .
 | `MYSQL_SSL_CA` | 可选，容器内挂载的数据库 CA 证书路径 |
 | `MYSQL_CONNECTION_LIMIT` | 每个容器的连接池上限，默认 `10` |
 | `DEEPSEEK_API_KEY` | Agent 模型密钥 |
+| `MASTRA_PLATFORM_ACCESS_TOKEN` | 可选；Mastra Platform Observability 项目访问令牌，用于在托管 Studio 查看部署 traces |
+| `MASTRA_PROJECT_ID` | 可选；对应的 Mastra Platform 项目 ID，配置平台观测时必填 |
 
 不要把这些值写进 Dockerfile、镜像、版本库或聊天记录。确保微信云托管容器的网络出口可访问 MySQL，并在数据库访问控制中只放行所需来源。若云托管出口地址不固定，先按云平台支持的网络连接方式配置，不要将数据库开放给任意公网来源。
 
 TLS 默认开启并校验证书；若数据库使用自定义 CA，需要将 CA 证书安全挂载到容器，并设置 `MYSQL_SSL_CA` 指向该文件。只有确认网络隔离且为本地开发时，才设置 `MYSQL_SSL=false`。
+
+### 部署耗时观测
+
+应用已配置 Mastra Platform exporter 和 `family-legal-agent` 服务名。要在 Mastra Platform 的 Studio/Observability 页面查看云托管请求 traces，请在云托管环境变量中设置 `MASTRA_PLATFORM_ACCESS_TOKEN` 和 `MASTRA_PROJECT_ID`。令牌应使用云托管密钥配置，不要写入 Dockerfile、镜像或版本库。没有配置这两个变量时，部署端不会将 traces 上传到 Mastra Platform。
+
+小程序 `/legal-agent/generate` trace 会显示请求解析、Agent 生成、可选联系卡评估和响应组装阶段的耗时；Agent、模型及工具 spans 会作为同一 trace 的子项显示。为避免把案件内容发送到观测平台，Agent trace 隐藏输入与输出，路由阶段 span 只记录成功状态，不记录请求或案件字段。
 
 ## 本地启动
 

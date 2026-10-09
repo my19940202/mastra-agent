@@ -1,5 +1,6 @@
 /** Serves compact legal-agent replies and contact-card actions to the mini program. */
 import { registerApiRoute } from '@mastra/core/server';
+import { SpanType, type Span } from '@mastra/core/observability';
 import { z } from 'zod';
 import {
   canOfferLeadCard,
@@ -16,6 +17,41 @@ type MiniappAgentResult = {
   runId?: string;
   suspendPayload?: unknown;
 };
+
+type MiniappTimingSpan = Span<SpanType.GENERIC>;
+type MiniappLeadMemory = Parameters<typeof readLeadCaseState>[0];
+
+/** Records a named route stage without attaching request or case data to telemetry. */
+export async function withMiniappTimingSpan<T>(
+  parent: MiniappTimingSpan | undefined,
+  name: string,
+  operation: (span: MiniappTimingSpan | undefined) => Promise<T>,
+): Promise<T> {
+  const span = parent?.createChildSpan({ name, type: SpanType.GENERIC });
+  try {
+    const result = await operation(span);
+    span?.end({ output: { ok: true } });
+    return result;
+  } catch (error) {
+    span?.end({ output: { ok: false } });
+    throw error;
+  }
+}
+
+export async function getMiniappLeadCardEligibility(
+  memory: MiniappLeadMemory,
+  ids: { thread: string; resource: string },
+  parent?: MiniappTimingSpan,
+): Promise<boolean> {
+  return withMiniappTimingSpan(parent, 'lead-card-evaluation', async span => {
+    const [state, leadState, turns] = await Promise.all([
+      withMiniappTimingSpan(span, 'working-memory-read', () => readLeadCaseState(memory, ids)),
+      withMiniappTimingSpan(span, 'lead-thread-state-read', () => readLeadThreadState(memory, ids)),
+      withMiniappTimingSpan(span, 'consultation-turn-count', () => countConsultationTurns(memory, ids.thread)),
+    ]);
+    return canOfferLeadCard(state, turns, leadState);
+  });
+}
 
 export function getMiniappAgentError(result: MiniappAgentResult): string | null {
   return result.finishReason === 'tool-calls' && !result.text?.trim()
@@ -53,30 +89,51 @@ export const miniappAgentRoute = registerApiRoute('/legal-agent/generate', {
   method: 'POST',
   requiresAuth: false,
   handler: async c => {
-    const body = await c.req.json();
-    const agent = c.get('mastra').getAgentById('family-legal-intake-agent');
-    const ids = z.object({ thread: z.string().min(1), resource: z.string().min(1) }).safeParse(body.memory);
-    const memory = ids.success ? await agent.getMemory() : undefined;
-    const result = await agent.generate(body.messages, {
-      memory: body.memory,
-      ...(body.autoResumeSuspendedTools === true
-        ? { autoResumeSuspendedTools: true }
-        : {}),
-    });
-    const incompleteError = getMiniappAgentError(result);
-    if (incompleteError) return c.json({ error: incompleteError, retryable: true }, 503);
-    let showLeadCard = false;
-    if (ids.success && memory && result.finishReason !== 'error') {
-      try {
-        const state = await readLeadCaseState(memory, ids.data);
-        const leadState = await readLeadThreadState(memory, ids.data);
-        const turns = await countConsultationTurns(memory, ids.data.thread);
-        showLeadCard = canOfferLeadCard(state, turns, leadState);
-      } catch (error) {
-        console.warn('Optional contact card could not be evaluated:', error);
+    const mastra = c.get('mastra');
+    const observability = mastra.observability.getSelectedInstance({});
+    const requestSpan = observability?.startSpan({
+      name: 'miniapp-agent-generate',
+      type: SpanType.GENERIC,
+    }) as MiniappTimingSpan | undefined;
+    let requestOk = false;
+    try {
+      const body = await withMiniappTimingSpan(requestSpan, 'request-parse', () => c.req.json());
+      const agent = mastra.getAgentById('family-legal-intake-agent');
+      const ids = z.object({ thread: z.string().min(1), resource: z.string().min(1) }).safeParse(body.memory);
+      const memory = ids.success
+        ? await withMiniappTimingSpan(requestSpan, 'memory-client-init', () => agent.getMemory())
+        : undefined;
+      const result = await withMiniappTimingSpan(requestSpan, 'agent-generate', () => agent.generate(body.messages, {
+        memory: body.memory,
+        ...(body.autoResumeSuspendedTools === true
+          ? { autoResumeSuspendedTools: true }
+          : {}),
+        tracingOptions: requestSpan
+          ? {
+              traceId: requestSpan.traceId,
+              parentSpanId: requestSpan.id,
+              hideInput: true,
+              hideOutput: true,
+            }
+          : undefined,
+      }));
+      const incompleteError = getMiniappAgentError(result);
+      if (incompleteError) return c.json({ error: incompleteError, retryable: true }, 503);
+      let showLeadCard = false;
+      if (ids.success && memory && result.finishReason !== 'error') {
+        try {
+          showLeadCard = await getMiniappLeadCardEligibility(memory, ids.data, requestSpan);
+        } catch (error) {
+          console.warn('Optional contact card could not be evaluated:', error);
+        }
       }
+      const response = await withMiniappTimingSpan(requestSpan, 'response-assembly', async () =>
+        toMiniappAgentResponse(result, showLeadCard));
+      requestOk = true;
+      return c.json(response);
+    } finally {
+      requestSpan?.end({ output: { ok: requestOk } });
     }
-    return c.json(toMiniappAgentResponse(result, showLeadCard));
   },
 });
 
