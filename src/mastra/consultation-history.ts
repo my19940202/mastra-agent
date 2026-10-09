@@ -18,7 +18,13 @@ export function visibleHistory(messages: MastraDBMessage[]) {
     });
     const text = [...texts, ...questions].join('\n').trim()
       || (typeof content === 'string' ? content : typeof content?.content === 'string' ? content.content : '');
-    return text ? [{ id: message.id, role: message.role, text, createdAt: message.createdAt }] : [];
+    return text ? [{
+      id: message.id,
+      role: message.role,
+      text,
+      kind: questions.length ? 'question' : 'text',
+      createdAt: message.createdAt,
+    }] : [];
   });
 }
 

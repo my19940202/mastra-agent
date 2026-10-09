@@ -14,5 +14,6 @@ test('history preserves user text and questions while omitting internal tool out
     { id: '3', role: 'tool', content: 'internal result' },
   ] as any);
   assert.deepEqual(messages.map(message => message.text), ['想咨询离婚', '是否有孩子？\n有\n没有']);
+  assert.deepEqual(messages.map(message => message.kind), ['text', 'question']);
   assert.deepEqual(visibleHistory([]), []);
 });
